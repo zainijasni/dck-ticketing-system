@@ -10,12 +10,9 @@ import cloudinary
 import cloudinary.uploader
 
 # --- 1. CONFIGURATION ---
-st.set_page_config(page_title="DCK Tech Cloud System", layout="wide")
+st.set_page_config(page_title="DCK Tech System", layout="wide")
 
-# ==========================================
-# ✅ CLOUDINARY CONFIG (GUNA SECRETS)
-# ==========================================
-# Kita simpan maklumat Cloudinary dalam Secrets juga supaya selamat
+# Cloudinary (Data Boss dah ada dalam Secrets atau kod)
 cloudinary.config( 
   cloud_name = "dmnk9vbyj", 
   api_key = "382361922884785", 
@@ -23,122 +20,131 @@ cloudinary.config(
   secure = True
 )
 
-# ID Google Sheet Boss
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
-# --- FUNGSI CONNECT GOOGLE (VERSI CLOUD) ---
 def connect_google():
     try:
         scope = ["https://www.googleapis.com/auth/spreadsheets"]
-        # AMBIL DATA DARI STREAMLIT SECRETS (BUKAN FAIL .JSON)
         creds_info = st.secrets["google_creds"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"Sistem gagal hubungi Google: {e}")
-        return None
-
-def upload_to_cloudinary(file_obj):
-    try:
-        upload_result = cloudinary.uploader.upload(file_obj)
-        return upload_result["secure_url"]
-    except: return "Error Upload"
+        return gspread.authorize(creds)
+    except: return None
 
 def load_data(tab_name):
     try:
         client = connect_google()
-        if client:
-            sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
-            return pd.DataFrame(sheet.get_all_records())
-        return pd.DataFrame()
+        return pd.DataFrame(client.open_by_key(SHEET_ID).worksheet(tab_name).get_all_records())
     except: return pd.DataFrame()
 
 def add_row(tab_name, row_data):
     try:
-        client = connect_google()
-        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
-        sheet.append_row(row_data)
+        connect_google().open_by_key(SHEET_ID).worksheet(tab_name).append_row(row_data)
     except: pass
 
-def update_status_sheet(ticket_id, new_status, new_note, new_cost):
+def update_status_sheet(ticket_id, stat, note, harga_jual, kos_part):
     try:
-        client = connect_google()
-        sheet = client.open_by_key(SHEET_ID).worksheet("Tickets")
+        sheet = connect_google().open_by_key(SHEET_ID).worksheet("Tickets")
         cell = sheet.find(str(ticket_id))
         if cell:
-            row = cell.row
-            sheet.update_cell(row, 9, new_status)
-            sheet.update_cell(row, 11, new_cost)
-            sheet.update_cell(row, 13, new_note)
+            # Kolum 9=Status, 11=HargaJual, 12=KosPart, 13=Note
+            sheet.update_cell(cell.row, 9, stat)
+            sheet.update_cell(cell.row, 11, harga_jual)
+            sheet.update_cell(cell.row, 12, kos_part)
+            sheet.update_cell(cell.row, 13, note)
             return True
         return False
     except: return False
 
-def generate_pdf(tiket_data):
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    c.setFont("Helvetica-Bold", 25); c.drawString(50, 800, "DCK TECH")
-    c.setFont("Helvetica", 10); c.drawString(50, 785, "COMPUTER REPAIR & SERVICES")
-    c.line(50, 775, 550, 775)
-    c.setFont("Helvetica-Bold", 14); c.drawString(50, 750, f"TIKET: {tiket_data['ID']}")
-    c.setFont("Helvetica", 11)
-    c.drawString(50, 720, f"Customer: {tiket_data['Customer']}"); c.drawString(300, 720, f"Model: {tiket_data['Model']}")
-    c.drawString(50, 680, "Masalah:"); c.drawString(50, 665, f"{tiket_data['Masalah']}")
-    c.line(50, 600, 550, 600)
-    c.setFont("Helvetica-Bold", 10); c.drawString(50, 585, "T&C:")
-    tc = ["1. Data loss bukan tanggungjawab kedai.", "2. Hak milik kedai >3 bulan.", "3. Warranty sparepart sahaja."]
-    y = 570
-    for line in tc:
-        c.drawString(60, y, line); y -= 15
-    c.save(); buffer.seek(0)
-    return buffer
-
 # --- NAVIGATION ---
 menu = st.sidebar.radio("NAVIGASI", ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY"])
 
+# --- DASHBOARD ---
 if menu == "📊 DASHBOARD":
-    st.title("📊 Dashboard")
+    st.title("📊 DCK Tech Dashboard")
     df = load_data("Tickets")
     if not df.empty:
-        search = st.text_input("Cari Nama/ID:")
-        if search: df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
-        st.dataframe(df[['ID','Tarikh','Customer','Model','Status','Kos']], use_container_width=True)
+        # Tunjuk Untung Kasar di Dashboard
+        df['Untung'] = pd.to_numeric(df['Kos'], errors='coerce').fillna(0) - pd.to_numeric(df['Kos_Part'], errors='coerce').fillna(0)
+        total_profit = df['Untung'].sum()
+        st.metric("Total Profit Keseluruhan", f"RM {total_profit:.2f}")
+        
+        search = st.text_input("🔍 Cari Nama/ID/Model:")
+        if search:
+            df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+        st.dataframe(df[['ID','Customer','Model','Status','Kos']], use_container_width=True)
 
+# --- DAFTAR TIKET ---
 elif menu == "📝 DAFTAR TIKET":
-    st.title("📝 Daftar Tiket")
-    if 'last_ticket' not in st.session_state: st.session_state['last_ticket'] = None
-    with st.form("f"):
-        nama = st.text_input("Nama"); phone = st.text_input("Phone")
-        model = st.text_input("Model"); masalah = st.text_area("Masalah")
-        gambar = st.camera_input("Snap")
-        t = st.checkbox("Setuju T&C")
-        if st.form_submit_button("SIMPAN"):
-            if t and nama:
+    st.title("📝 Daftar Tiket Baru")
+    with st.form("daftar"):
+        c1, c2 = st.columns([1,1]) # Layout Mobile Friendly
+        nama = c1.text_input("Nama Pelanggan")
+        phone = c2.text_input("No WhatsApp")
+        model = c1.text_input("Model Peranti")
+        masalah = st.text_area("Masalah")
+        gambar = st.camera_input("Snap Gambar")
+        tnc = st.checkbox("Setuju T&C (Data loss/3 bulan/Warranty part)")
+        
+        if st.form_submit_button("SIMPAN TIKET"):
+            if nama and model and tnc:
                 tid = f"DCK-{datetime.now().strftime('%d%H%M')}"
-                img = upload_to_cloudinary(gambar) if gambar else "No Image"
-                row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, model, "", "", masalah, "Pending", "-", 0.0, img, ""]
-                add_row("Tickets", row)
-                st.session_state['last_ticket'] = {"ID": tid, "Tarikh": row[1], "Customer": nama, "Model": model, "Masalah": masalah, "Phone": phone}
-                st.success("Success!"); st.rerun()
-    if st.session_state['last_ticket']:
-        resit = generate_pdf(st.session_state['last_ticket'])
-        st.download_button("Download PDF", resit, "resit.pdf")
+                img = cloudinary.uploader.upload(gambar)["secure_url"] if gambar else "No Image"
+                # Row: ID, Tarikh, Nama, Phone, Model, SN, Pwd, Masalah, Status, KosPart, HargaJual, Image, Note
+                add_row("Tickets", [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, model, "", "", masalah, "Pending", 0, 0, img, ""])
+                st.success(f"Tiket {tid} Berjaya Disimpan!"); st.balloons()
+            else: st.error("Isi Nama, Model & Tick T&C!")
 
+# --- UPDATE STATUS ---
 elif menu == "🔧 UPDATE STATUS":
-    st.title("🔧 Technician")
-    df = load_data("Tickets")
-    if not df.empty:
-        pilih_id = st.selectbox("Pilih ID", df['ID'].tolist())
-        job = df[df['ID'] == pilih_id].iloc[0]
-        if "http" in str(job['Image_Link']): st.image(job['Image_Link'], width=300)
-        with st.form("u"):
-            stat = st.selectbox("Status", ["Pending", "Checking", "Done"])
-            kos = st.number_input("Kos", value=float(job['Kos']) if job['Kos'] != "" else 0.0)
-            note = st.text_area("Nota", value=str(job['Tech_Note']))
-            if st.form_submit_button("UPDATE"):
-                if update_status_sheet(pilih_id, stat, note, kos): st.rerun()
+    st.title("🔧 Bilik Technician")
+    df_t = load_data("Tickets")
+    if not df_t.empty:
+        search_tid = st.text_input("🔍 Taip Ticket ID:")
+        t_list = df_t['ID'].tolist()
+        idx = t_list.index(search_tid) if search_tid in t_list else 0
+        pilih_id = st.selectbox("Pilih Job:", t_list, index=idx)
+        job = df_t[df_t['ID'] == pilih_id].iloc[0]
+        
+        st.warning(f"JOB: {job['ID']} | {job['Customer']}")
+        
+        with st.form("update_job"):
+            col_a, col_b = st.columns(2)
+            stat = col_a.selectbox("Status Terkini", ["Checking", "Waiting Part", "Repairing", "Done", "Collected"])
+            note = st.text_area("Nota Kerosakan/Tindakan", value=str(job['Tech_Note']))
+            
+            st.divider()
+            st.subheader("💰 Pengiraan Harga")
+            # Sini Boss letak harga kos dan harga jual
+            k_part = col_a.number_input("Kos Part (RM) - Modal Boss", value=float(job['Kos_Part']) if job['Kos_Part'] != "" else 0.0)
+            h_jual = col_b.number_input("Harga Jual/Servis (RM) - Caj Customer", value=float(job['Kos']) if job['Kos'] != "" else 0.0)
+            
+            profit = h_jual - k_part
+            st.write(f"**Untung Bersih Job Ini: RM {profit:.2f}**")
+            
+            if st.form_submit_button("KEMASKINI SEMUA"):
+                if update_status_sheet(pilih_id, stat, note, h_jual, k_part):
+                    st.success("Data Berjaya Dikemaskini!"); st.rerun()
 
+        st.divider()
+        # --- RUANGAN PARTS (FIXED) ---
+        st.subheader("🔩 Alat Ganti (Parts)")
+        df_p = load_data("Parts")
+        if not df_p.empty:
+            curr = df_p[df_p['TicketID'].astype(str) == str(pilih_id)]
+            if not curr.empty: 
+                st.table(curr[['NamaPart', 'Supplier', 'TarikhExpire']])
+            else:
+                st.info("Belum ada part direkodkan untuk job ini.")
+        
+        with st.expander("➕ Rekod Part Baru"):
+            with st.form("rekod_p"):
+                pn = st.text_input("Nama Part"); ps = st.text_input("Supplier"); pw = st.number_input("Warranty (Bulan)", 0)
+                if st.form_submit_button("SIMPAN PART"):
+                    exp = (datetime.now() + pd.DateOffset(months=pw)).strftime("%Y-%m-%d")
+                    add_row("Parts", [f"P-{datetime.now().strftime('%M%S')}", pilih_id, pn, ps, datetime.now().strftime("%Y-%m-%d"), pw, exp])
+                    st.success("Part Direkod!"); st.rerun()
+
+# --- INVENTORY ---
 elif menu == "📦 INVENTORY":
-    st.title("📦 Parts")
+    st.title("📦 Log Parts")
     st.dataframe(load_data("Parts"), use_container_width=True)
