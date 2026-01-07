@@ -1,0 +1,7 @@
+streamlit
+pandas
+gspread
+google-oauth2
+google-api-python-client
+reportlab
+cloudinary
