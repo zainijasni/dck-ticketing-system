@@ -127,7 +127,6 @@ def add_row(tab_name, row):
     robust_api_call(sheet.append_row, row); st.cache_data.clear()
 
 def update_cell_data(tab_name, id_val, col_dict):
-    """Generic update function"""
     client = get_client(); sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
     cell = robust_api_call(sheet.find, str(id_val))
     if cell:
@@ -142,6 +141,42 @@ def delete_row_data(tab_name, id_val):
     cell = robust_api_call(sheet.find, str(id_val))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
+    return False
+
+def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID).worksheet("Tickets")
+    cell = robust_api_call(sheet.find, str(tid))
+    if cell:
+        # Col 3=Cust, 4=Phone, 5=Email, 6=Model, 7=SN, 8=Pwd, 9=Masalah
+        robust_api_call(sheet.update_cell, cell.row, 3, nama)
+        robust_api_call(sheet.update_cell, cell.row, 4, phone)
+        robust_api_call(sheet.update_cell, cell.row, 5, email)
+        robust_api_call(sheet.update_cell, cell.row, 6, model)
+        robust_api_call(sheet.update_cell, cell.row, 7, sn)
+        robust_api_call(sheet.update_cell, cell.row, 8, pwd)
+        robust_api_call(sheet.update_cell, cell.row, 9, masalah)
+        st.cache_data.clear()
+        return True
+    return False
+
+def update_part_data(part_id, new_name, new_supp, new_price, new_warranty):
+    client = get_client(); sheet = client.open_by_key(SHEET_ID).worksheet("Parts")
+    cell = robust_api_call(sheet.find, str(part_id))
+    if cell:
+        robust_api_call(sheet.update_cell, cell.row, 3, new_name)
+        robust_api_call(sheet.update_cell, cell.row, 4, new_supp)
+        robust_api_call(sheet.update_cell, cell.row, 6, new_warranty)
+        new_exp = (datetime.now() + pd.DateOffset(months=int(new_warranty))).strftime("%Y-%m-%d")
+        robust_api_call(sheet.update_cell, cell.row, 7, new_exp)
+        robust_api_call(sheet.update_cell, cell.row, 8, new_price)
+        st.cache_data.clear(); return True
+    return False
+
+def delete_part(part_id):
+    client = get_client(); sheet = client.open_by_key(SHEET_ID).worksheet("Parts")
+    cell = robust_api_call(sheet.find, str(part_id))
+    if cell: robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
     return False
 
 # --- 4. PDF GENERATOR ---
@@ -183,29 +218,44 @@ def generate_pdf(t, type="SERVICE"):
     y -= 30; p.drawString(50, y, "Customer Signature: _________________"); p.drawString(300, y, "Authorized Signature: _________________")
     p.save(); buffer.seek(0); return buffer
 
-# --- 5. EMAIL & LINKS ---
+# --- 5. EMAIL & LINKS (FIXED CRASH ISSUE) ---
 def generate_message_content(data):
-    d = {k: data.get(k, '-') for k in data}
-    msg = f"Hai {d['Customer']},\n\nTerima kasih berurusan dengan {st.session_state.config.get('Company_Name')}."
-    if d.get('Status') == 'Pending': msg += "\nKami telah menerima peranti anda."
-    elif d.get('Status') in ['Done', 'Collected']: msg += "\n✅ Peranti SIAP."
-    else: msg += f"\nStatus terkini: {d.get('Status')}"
+    # SAFETY FIRST: Gunakan .get() untuk semua field
+    cust = data.get('Customer', 'Pelanggan')
+    status = data.get('Status', 'Pending')
+    tid = data.get('ID', '-')
+    model = data.get('Model', '-')
+    sn = data.get('SN', '-')
+    masalah = data.get('Masalah', '-')
+    note = data.get('Tech_Note', '-')
+    price = safe_float(data.get('Harga_Jual', 0))
+    company = st.session_state.config.get('Company_Name', 'DCK TECH')
+
+    msg = f"Hai {cust},\n\nTerima kasih berurusan dengan {company}."
     
-    msg += f"\n\n--- BUTIRAN ---\nID: {d['ID']}\nModel: {d['Model']}\nMasalah: {d['Masalah']}\nNota: {d.get('Tech_Note', '-')}"
-    if d.get('Status') in ['Done', 'Collected']: msg += f"\n\n💰 TOTAL: RM {safe_float(d.get('Harga_Jual', 0)):.2f}"
+    if status == 'Pending': msg += "\nKami telah menerima peranti anda."
+    elif status in ['Done', 'Collected']: msg += "\n✅ Peranti SIAP."
+    else: msg += f"\nStatus terkini: {status}"
+    
+    msg += f"\n\n--- BUTIRAN ---\nID: {tid}\nModel: {model}\nS/N: {sn}\nMasalah: {masalah}\nNota: {note}"
+    
+    if status in ['Done', 'Collected']: msg += f"\n\n💰 TOTAL: RM {price:.2f}"
+    
     msg += "\n\nSekian,\nTeam DCK Tech"
     return msg
 
 def generate_links(type, data):
     phone = clean_phone_number_my(data.get('Phone', ''))
+    # Panggil fungsi yang dah selamat
     full_msg = generate_message_content(data)
+    
     if type == "WA": return f"https://wa.me/{phone}?text={urllib.parse.quote(full_msg)}"
-    elif type == "EMAIL": return f"mailto:{data.get('Email')}?subject=Status%20Tiket&body={urllib.parse.quote(full_msg)}"
+    elif type == "EMAIL": return f"mailto:{data.get('Email', '')}?subject=Status%20Tiket&body={urllib.parse.quote(full_msg)}"
 
 def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
     sender = st.session_state.email_user; password = st.session_state.email_pass
     if not sender or not password: return False, "Sila set Email di Tetapan."
-    msg = MIMEMultipart(); msg['From'] = sender; msg['To'] = to_email; msg['Subject'] = f"Tiket: {data.get('ID')}"
+    msg = MIMEMultipart(); msg['From'] = sender; msg['To'] = to_email; msg['Subject'] = f"Tiket: {data.get('ID', '-')}"
     msg.attach(MIMEText(generate_message_content(data), 'plain'))
     part = MIMEApplication(pdf_buffer.getvalue(), Name=pdf_name)
     part['Content-Disposition'] = f'attachment; filename="{pdf_name}"'
@@ -233,11 +283,6 @@ if st.session_state.page == "📊 DASHBOARD":
     sales_today = 0.0
     if not df_s.empty:
         sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
-    if not df.empty:
-        # Kira Tiket yang bayar hari ni (Kita assume status Done/Collected hari ni)
-        # Note: Untuk simple, kita kira based on tarikh masuk for now, or you can add PaymentDate later.
-        # Here we just show Sales Count for simplicity or Total Revenue All Time
-        pass
 
     if not df.empty:
         c1, c2, c3, c4 = st.columns(4)
@@ -247,7 +292,6 @@ if st.session_state.page == "📊 DASHBOARD":
         c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
     
     st.divider()
-    # KUTIPAN HARI INI (SALES ONLY)
     st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
     
     st.write("### Senarai Job Terkini")
@@ -258,20 +302,17 @@ if st.session_state.page == "📊 DASHBOARD":
                 if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
                     st.session_state.selected_id = row.get('ID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
 
-# === PAGE: DAFTAR TIKET (RESTORED LAYOUT) ===
+# === PAGE: DAFTAR TIKET (3-COLUMN LAYOUT) ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     with st.container(border=True):
-        # COLUMN 1: CUSTOMER
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("### 👤 Pelanggan")
             nama = st.text_input("Nama"); phone = st.text_input("No HP"); email = st.text_input("Email")
-        # COLUMN 2: DEVICE
         with c2:
             st.markdown("### 💻 Peranti")
             model = st.text_input("Model"); sn = st.text_input("Serial No"); pwd = st.text_input("Password")
-        # COLUMN 3: DIAGNOSIS
         with c3:
             st.markdown("### 🔧 Diagnosis")
             mslh = st.multiselect("Masalah", ["Slow", "Screen", "Battery", "Keyboard", "Format", "Other"])
@@ -307,20 +348,17 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m)
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI (EDIT/DELETE ADDED) ===
+# === PAGE: JUALAN KEDAI (POS) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
-    
     tab_pos, tab_manage = st.tabs(["🛒 Jualan Baru", "📋 Urus Jualan"])
     
     with tab_pos:
         with st.container(border=True):
             c1, c2 = st.columns(2)
-            item = c1.text_input("Nama Barang")
-            cust = c2.text_input("Nama Pelanggan", value="Walk-in")
+            item = c1.text_input("Nama Barang"); cust = c2.text_input("Nama Pelanggan", value="Walk-in")
             c3, c4, c5 = st.columns(3)
-            qty = c3.number_input("Qty", 1, 100, 1)
-            price = c4.number_input("Harga Unit (RM)", 0.0)
+            qty = c3.number_input("Qty", 1, 100, 1); price = c4.number_input("Harga Unit (RM)", 0.0)
             total = qty * price
             c5.metric("TOTAL", f"RM {total:.2f}")
             pay = st.selectbox("Bayaran", ["Cash", "QR", "Transfer"])
@@ -332,7 +370,6 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     st.toast("Jualan Direkod!", icon='💰')
                     st.session_state.last_sale = {"ID": sid, "Tarikh": datetime.now().strftime("%Y-%m-%d"), "Item": item, "Qty": qty, "Harga_Unit": price, "Total": total, "Customer": cust}
                     time.sleep(1); st.rerun()
-        
         if 'last_sale' in st.session_state:
             st.download_button("🖨️ Resit", generate_pdf(st.session_state.last_sale, "SALES"), "Resit.pdf", use_container_width=True)
 
@@ -341,22 +378,16 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
         if not df_s.empty:
             st.dataframe(df_s)
             sale_id = st.selectbox("Pilih ID Jualan untuk Edit/Hapus:", ["-"] + df_s['ID'].tolist())
-            
             if sale_id != "-":
                 curr = df_s[df_s['ID'] == sale_id].iloc[0]
                 with st.form("edit_sale"):
                     e_item = st.text_input("Item", curr['Item'])
                     e_qty = st.number_input("Qty", value=int(curr['Qty']))
                     e_price = st.number_input("Harga Unit", value=float(curr['Harga_Unit']))
-                    
                     c_del, c_upd = st.columns(2)
-                    if c_del.form_submit_button("🗑️ Hapus Rekod"):
-                        delete_row_data("Sales", sale_id); st.rerun()
-                    
-                    if c_upd.form_submit_button("💾 Update Rekod"):
-                        # Col Index: 3=Item, 4=Qty, 5=Price, 6=Total
-                        e_total = e_qty * e_price
-                        update_cell_data("Sales", sale_id, {3: e_item, 4: e_qty, 5: e_price, 6: e_total})
+                    if c_del.form_submit_button("🗑️ Hapus"): delete_row_data("Sales", sale_id); st.rerun()
+                    if c_upd.form_submit_button("💾 Update"):
+                        update_cell_data("Sales", sale_id, {3: e_item, 4: e_qty, 5: e_price, 6: e_qty * e_price})
                         st.success("Updated!"); st.rerun()
 
 # === PAGE: UPDATE STATUS ===
@@ -422,7 +453,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     d = st.selectbox("Del", ["-"]+parts['ID'].tolist())
                     if d != "-" and st.button("Delete"): delete_part(d); st.rerun()
 
-# === PAGE: INVENTORY & LAPORAN (RESTORED CHARTS) ===
+# === PAGE: INVENTORY & LAPORAN ===
 elif st.session_state.page == "📦 INVENTORY":
     st.title("📦 Inventory Log"); df = load_data("Parts"); st.dataframe(df)
 
@@ -436,7 +467,6 @@ elif st.session_state.page == "📈 LAPORAN":
         df['Kos_Part'] = df['Kos_Part'].apply(safe_float)
         df['Untung'] = df['Harga_Jual'] - df['Kos_Part']
         
-        # TOTAL METRICS
         serv_sales = df['Harga_Jual'].sum()
         shop_sales = df_s['Total'].apply(safe_float).sum() if not df_s.empty else 0
         total_rev = serv_sales + shop_sales
