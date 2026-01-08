@@ -27,6 +27,7 @@ cloudinary.config(
 
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
+# --- SESSION STATE ---
 if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 if 'email_user' not in st.session_state: st.session_state.email_user = ""
@@ -224,7 +225,7 @@ def generate_message_content(data):
 
     msg = f"Hai {cust},\n\nTerima kasih berurusan dengan {company}."
     if status == 'Pending': msg += "\nKami telah menerima peranti anda untuk pemeriksaan."
-    elif status in ['Done', 'Collected']: msg += "\n✅ Peranti SIAP."
+    elif status in ['Done', 'Collected']: msg += "\n✅ Berita Baik! Peranti anda telah SIAP dibaiki."
     else: msg += f"\nStatus terkini peranti anda: {status}"
     
     msg += f"\n\n--- BUTIRAN ---\nID: {tid}\nModel: {model}\nS/N: {sn}\nMasalah: {masalah}\nNota: {note}"
@@ -364,7 +365,6 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     st.toast("Jualan Direkod!", icon='💰')
                     st.session_state.last_sale = {"ID": sid, "Tarikh": datetime.now().strftime("%Y-%m-%d"), "Item": item, "Qty": qty, "Harga_Unit": price, "Total": total, "Customer": cust}
                     time.sleep(1); st.rerun()
-        
         if 'last_sale' in st.session_state:
             st.download_button("🖨️ Resit", generate_pdf(st.session_state.last_sale, "SALES"), "Resit.pdf", use_container_width=True)
 
@@ -385,7 +385,7 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                         update_cell_data("Sales", sale_id, {3: e_item, 4: e_qty, 5: e_price, 6: e_qty * e_price})
                         st.toast("Jualan Dikemaskini!", icon='✅'); time.sleep(1); st.rerun()
 
-# === PAGE: UPDATE STATUS (THE PARTS FIX) ===
+# === PAGE: UPDATE STATUS ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
     st.title("🔧 Bilik Technician")
     df = load_data("Tickets")
@@ -463,13 +463,13 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             st.toast("Status Dikemaskini!", icon='🎉'); time.sleep(1); st.rerun()
                 if stt in ["Done", "Collected"]: st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
 
-            # --- RESTORED PARTS TABS ---
             with t2:
+                # --- TABS PARTS RESTORED ---
                 pt_list, pt_add, pt_edit = st.tabs(["📋 List", "➕ Tambah", "✏️ Edit"])
                 
                 with pt_list:
                     if not parts.empty:
-                        st.dataframe(parts[['ID', 'NamaPart', 'HargaBeli']], use_container_width=True)
+                        st.dataframe(parts[['NamaPart', 'TarikhExpire', 'HargaBeli']], use_container_width=True)
                         d = st.selectbox("Pilih ID untuk Hapus:", ["-"] + parts['ID'].tolist())
                         if d != "-" and st.button("Hapus Part"):
                             delete_part(d); st.toast("Part dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
@@ -507,7 +507,7 @@ elif st.session_state.page == "📦 INVENTORY":
         for i, row in df_p.iterrows():
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
-                c1.write(f"**{row.get('NamaPart')}** (RM {row.get('HargaBeli')}) | Ticket: {row.get('TicketID')}")
+                c1.write(f"**{row.get('NamaPart')}** (RM {row.get('HargaBeli')}) | Exp: {row.get('TarikhExpire')} | Ticket: {row.get('TicketID')}")
                 if c2.button("Go to Job", key=f"inv_{row.get('ID')}"):
                     st.session_state.selected_id = row.get('TicketID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
     else: st.info("Tiada barang.")
