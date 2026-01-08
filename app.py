@@ -18,7 +18,7 @@ from email.mime.application import MIMEApplication
 import qrcode 
 
 # =============================================================================
-# 1. CONFIGURATION & SETUP (WAJIB DUDUK ATAS SEKALI)
+# 1. CONFIGURATION & SETUP
 # =============================================================================
 st.set_page_config(page_title="DCK Tech System", layout="wide")
 
@@ -51,9 +51,6 @@ if 'pos_cart' not in st.session_state:
 
 if 'restock_cart' not in st.session_state:
     st.session_state.restock_cart = []
-
-if 'db_ready' not in st.session_state:
-    st.session_state.db_ready = False
 
 if 'config' not in st.session_state:
     st.session_state.config = {
@@ -92,7 +89,7 @@ def robust_api_call(func, *args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception:
-            time.sleep(1.5) # Rehat 1.5 saat jika error
+            time.sleep(1.5)
             continue
     return None
 
@@ -108,7 +105,7 @@ def clean_phone_number_my(phone_input):
         return "6" + p
 
 # =============================================================================
-# 3. DATABASE ENGINE
+# 3. DATABASE ENGINE (Google Sheets)
 # =============================================================================
 @st.cache_resource
 def get_client():
@@ -117,13 +114,8 @@ def get_client():
     return gspread.authorize(creds)
 
 def init_db():
-    """
-    Fungsi ini hanya berjalan SEKALI sahaja apabila aplikasi mula dibuka.
-    Ia memastikan semua Tab dan Header wujud.
-    """
-    if st.session_state.db_ready:
+    if 'db_checked' in st.session_state:
         return
-
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
@@ -181,25 +173,29 @@ def init_db():
         if len(ws_r.row_values(1)) != len(h_r):
             ws_r.update("A1:H1", [h_r])
 
-        # Tandakan DB sudah sedia
-        st.session_state.db_ready = True
+        # 7. Reference Data (New in V81 for Standardization)
+        try:
+            ws_ref = sh.worksheet("Ref_Data")
+        except:
+            ws_ref = sh.add_worksheet("Ref_Data", 1000, 5)
+        h_ref = ["Type", "Value"]
+        if len(ws_ref.row_values(1)) != len(h_ref):
+            ws_ref.update("A1:B1", [h_ref])
 
-    except Exception as e:
-        st.error(f"Ralat Database Init: {e}")
+        st.session_state.db_checked = True
+    except:
+        pass
 
-# Panggil Init Sekali Sahaja di sini
-init_db()
-
-# --- DATA LOADING (V80: Optimized Cache) ---
-@st.cache_data(ttl=5) # Cache data selama 5 saat sahaja
 def load_data(tab_name):
+    # No Cache here to solve sync issues and ensure live data
+    init_db()
     client = get_client()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
-        # Patch Empty DataFrame
+        # Patch Empty
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -211,14 +207,14 @@ def load_data(tab_name):
                  df = pd.DataFrame(columns=["ItemCode", "ItemName", "CostPrice", "SellPrice", "CurrentStock", "Supplier", "LastUpdated"])
             elif tab_name == "Restock_Log":
                  df = pd.DataFrame(columns=["LogID", "Date", "InvoiceNo", "Supplier", "ItemName", "QtyAdded", "CostPrice", "TotalCost"])
+            elif tab_name == "Ref_Data":
+                 df = pd.DataFrame(columns=["Type", "Value"])
 
-        # Patch Missing Columns if any
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
-            
         return df
     except:
-        return pd.DataFrame() # Return empty DF if fail
+        return pd.DataFrame()
 
 def load_config():
     try:
@@ -242,7 +238,6 @@ def add_row(tab_name, row):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
     robust_api_call(sheet.append_row, row)
-    st.cache_data.clear() # Clear cache supaya data baru nampak
 
 def update_cell_data(tab_name, id_val, col_dict):
     client = get_client()
@@ -251,7 +246,6 @@ def update_cell_data(tab_name, id_val, col_dict):
     if cell:
         for col_idx, val in col_dict.items():
             robust_api_call(sheet.update_cell, cell.row, col_idx, val)
-        st.cache_data.clear()
         return True
     return False
 
@@ -261,22 +255,19 @@ def delete_row_data(tab_name, id_val):
     cell = robust_api_call(sheet.find, str(id_val))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row)
-        st.cache_data.clear()
         return True
     return False
 
 # --- INVENTORY LOGIC ---
 def update_stock(item_code, qty_change):
-    # qty_change: Positif tambah, Negatif tolak
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
         cell = sheet.find(str(item_code))
         if cell:
-            curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock
+            curr = safe_int(sheet.cell(cell.row, 5).value)
             new_qty = curr + int(qty_change)
             sheet.update_cell(cell.row, 5, new_qty)
-            st.cache_data.clear()
             return True
     except:
         pass
@@ -286,19 +277,27 @@ def check_and_update_master(code, name, cost, sell, qty, supplier):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
+        # Cari berdasarkan NAMA BARANG untuk standardize
+        # Jika nama sama, kita anggap barang sama (walaupun code lain, kita update stock row yg wujud)
+        
+        # Cari row berdasarkan kod dulu (paling tepat)
         cell = sheet.find(str(code))
+        
+        # Kalau kod tak jumpa, cari based on nama (exact match) untuk merge
+        if not cell:
+            cell = sheet.find(str(name))
+            
         if cell:
-            # Update existing
+            # Barang dah ada, kita UPDATE kuantiti
             curr_qty = safe_int(sheet.cell(cell.row, 5).value)
             sheet.update_cell(cell.row, 5, curr_qty + int(qty)) # Update Stock
-            sheet.update_cell(cell.row, 3, cost) # Update Cost
-            sheet.update_cell(cell.row, 4, sell) # Update Sell
+            sheet.update_cell(cell.row, 3, cost) # Update Cost (Latest)
+            sheet.update_cell(cell.row, 4, sell) # Update Sell (Latest)
             sheet.update_cell(cell.row, 6, supplier) # Update Supplier
         else:
-            # Create new
+            # Barang baru, kita create
             tgl = datetime.now().strftime("%Y-%m-%d")
             sheet.append_row([code, name, cost, sell, qty, supplier, tgl])
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -315,7 +314,6 @@ def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
         sheet.update_cell(cell.row, 7, sn)
         sheet.update_cell(cell.row, 8, pwd)
         sheet.update_cell(cell.row, 9, masalah)
-        st.cache_data.clear()
         return True
     return False
 
@@ -325,7 +323,6 @@ def delete_part(part_id):
     cell = robust_api_call(sheet.find, str(part_id))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row)
-        st.cache_data.clear()
         return True
     return False
 
@@ -532,7 +529,7 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
         return False, str(e)
 
 # =============================================================================
-# 🚦 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
+# 🚦 V70 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
 # =============================================================================
 query_params = st.query_params 
 sn_query = query_params.get("sn", None)
@@ -549,6 +546,7 @@ if sn_query:
     load_config()
     cfg = st.session_state.config
     
+    # Header: Digital Profile
     c_logo, c_title = st.columns([1, 4])
     with c_title:
         st.title(f"💻 {cfg.get('Company_Name', 'DCK TECH')} - Digital Profile")
@@ -596,7 +594,7 @@ if sn_query:
 # 6. NAVIGATION & PAGES
 # =============================================================================
 load_config()
-PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🛒 JUALAN KEDAI", "🔧 UPDATE STATUS", "📦 PENGURUSAN STOK", "🔎 HISTORY DEVICE", "📈 LAPORAN", "⚙️ TETAPAN"]
+PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🛒 JUALAN KEDAI", "🔧 UPDATE STATUS", "📦 PENGURUSAN STOK", "🗂️ PENGURUSAN DATA", "🔎 HISTORY DEVICE", "📈 LAPORAN", "⚙️ TETAPAN"]
 try: idx = PAGES.index(st.session_state.page)
 except: idx = 0
 sel = st.sidebar.radio("NAVIGASI", PAGES, index=idx)
@@ -610,39 +608,36 @@ if st.session_state.page == "📊 DASHBOARD":
     df = load_data("Tickets")
     df_s = load_data("Sales")
     
-    if df.empty and df_s.empty:
-        st.warning("Data sedang dimuatkan atau database kosong. Sila tunggu sebentar...")
-    else:
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        sales_today = 0.0
-        if not df_s.empty:
-            sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    sales_today = 0.0
+    if not df_s.empty:
+        sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
 
-        if not df.empty:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.info(f"PENDING: {len(df[df['Status'] == 'Pending'])}")
-            c2.warning(f"CHECKING: {len(df[df['Status'] == 'Checking'])}")
-            c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
-            c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
-        
-        st.divider()
-        st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
-        
-        st.write("### 🔍 Cari Ticket")
-        search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
-        st.write("### Senarai Job Terkini")
-        if not df.empty:
-            if search:
-                df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
-            for _, row in df.iloc[::-1].head(10).iterrows():
-                with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
-                    st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
-                    if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
-                        st.session_state.selected_id = row.get('ID')
-                        st.session_state.page = "🔧 UPDATE STATUS"
-                        st.rerun()
-        else:
-            st.info("Tiada rekod tiket.")
+    if not df.empty:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.info(f"PENDING: {len(df[df['Status'] == 'Pending'])}")
+        c2.warning(f"CHECKING: {len(df[df['Status'] == 'Checking'])}")
+        c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
+        c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
+    
+    st.divider()
+    st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
+    
+    st.write("### 🔍 Cari Ticket")
+    search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
+    st.write("### Senarai Job Terkini")
+    if not df.empty:
+        if search:
+            df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+        for _, row in df.iloc[::-1].head(10).iterrows():
+            with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
+                st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
+                if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
+                    st.session_state.selected_id = row.get('ID')
+                    st.session_state.page = "🔧 UPDATE STATUS"
+                    st.rerun()
+    else:
+        st.info("Tiada rekod tiket.")
 
 # === PAGE: DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
@@ -814,12 +809,72 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
     if not df.empty:
         ids = df['ID'].astype(str).tolist()
         tgt = str(st.session_state.selected_id) if st.session_state.selected_id else ids[-1]
+        
+        # UI Selection
         pid = st.selectbox("Pilih Job:", ids, index=ids.index(tgt) if tgt in ids else 0)
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        with st.expander("ℹ️ MAKLUMAT TIKET & KOMUNIKASI (KLIK EDIT)", expanded=True):
-            edit_mode = st.checkbox("✏️ Tick Untuk Edit Info")
-            if edit_mode:
+        # Status Selection (Outside Form for Instant Reactivity)
+        st.write("---")
+        st.subheader("Status & Tindakan")
+        
+        # Dapatkan status semasa
+        current_status = job.get('Status', 'Pending')
+        status_options = ["Pending", "Checking", "Waiting Part", "Done", "Collected"]
+        
+        # Ensure current status is valid
+        if current_status not in status_options:
+            index_status = 0
+        else:
+            index_status = status_options.index(current_status)
+            
+        # Selectbox outside form triggers rerun immediately
+        selected_status = st.selectbox("Update Status:", status_options, index=index_status)
+        
+        with st.form("upd_status"):
+            
+            # Logic: Show Warranty Radio only if Status is Done/Collected
+            w_choice = "Tiada"
+            if selected_status in ["Done", "Collected"]:
+                st.info("✅ Job Siap/Diambil. Sila pilih Warranty:")
+                w_choice = st.radio("Tempoh Warranty:", ["Tiada", "1 Bulan", "3 Bulan"], horizontal=True)
+            
+            # Logic: Pre-fill Tech Note
+            new_note = job.get('Tech_Note','')
+            
+            nt = st.text_area("Solution / Tech Note", value=new_note)
+            hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
+            
+            if st.form_submit_button("💾 UPDATE STATUS & WARRANTY"):
+                # Append warranty to note if selected
+                final_note = nt
+                if w_choice != "Tiada" and "Warranty:" not in final_note:
+                    final_note += f"\n[Warranty: {w_choice}]"
+                
+                sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
+                cl = robust_api_call(sheet.find, str(pid))
+                
+                if cl:
+                    # Column 12: Status, 14: Harga Jual, 16: Tech Note
+                    robust_api_call(sheet.update_cell, cl.row, 12, selected_status)
+                    robust_api_call(sheet.update_cell, cl.row, 14, hj)
+                    robust_api_call(sheet.update_cell, cl.row, 16, final_note)
+                    st.cache_data.clear()
+                    st.toast("Status & Warranty Dikemaskini!", icon='🎉')
+                    time.sleep(1)
+                    st.rerun()
+
+        # Print Receipt Button (Outside Form)
+        if selected_status in ["Done", "Collected"]:
+            st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+
+        st.divider()
+        
+        # TABS FOR INFO & PARTS
+        tab_info, tab_parts, tab_qr = st.tabs(["ℹ️ Info & Edit", "🔩 Parts & Stok", "🖨️ QR Sticker"])
+        
+        with tab_info:
+            with st.expander("Klik untuk Edit Info Customer", expanded=True):
                 with st.form("edit_cust_form"):
                     ec_nama = st.text_input("Nama", value=job.get('Customer',''))
                     c_ec1, c_ec2 = st.columns(2)
@@ -830,148 +885,77 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     ec_sn = c_ec4.text_input("Serial No", value=job.get('SN',''))
                     ec_pwd = c_ec5.text_input("Password", value=job.get('Password',''))
                     ec_mslh = st.text_area("Masalah", value=job.get('Masalah',''))
-                    if st.form_submit_button("💾 SIMPAN PERUBAHAN"):
+                    if st.form_submit_button("Simpan Perubahan"):
                         if update_customer_info_db(pid, ec_nama, ec_phone, ec_email, ec_model, ec_sn, ec_pwd, ec_mslh):
                             st.toast("Info Berjaya Diubah!", icon='✅')
                             time.sleep(1)
                             st.rerun()
-            else:
-                c1, c2 = st.columns(2)
-                c1.write(f"**Nama:** {job.get('Customer','-')}")
-                c1.write(f"**Model:** {job.get('Model','-')}")
-                c1.write(f"**Phone:** {job.get('Phone','-')}")
-                c1.write(f"**S/N:** {job.get('SN','-')}")
-                c2.write(f"**Masalah:** {job.get('Masalah','-')}")
-                c2.error(f"🔐 PWD: {job.get('Password','-')}")
-
-            st.divider()
             
-            with st.expander("🖨️ GENERATE QR STICKER (HEALTH CARD)"):
-                st.info("Tampal ini di bawah laptop customer.")
-                
-                my_url = "https://dck-ticketing-system-r7vonv3ctwvxzfh2yqn4s5.streamlit.app"
-                app_url = st.text_input("Link Sistem (Auto-Set)", value=my_url)
-                
-                if app_url and job.get('SN'):
-                    if app_url.endswith("/"): app_url = app_url[:-1]
-                    qr_data = f"{app_url}/?sn={job.get('SN')}"
-                    
-                    qr = qrcode.QRCode(box_size=10, border=2)
-                    qr.add_data(qr_data)
-                    qr.make(fit=True)
-                    img_qr = qr.make_image(fill_color="black", back_color="white")
-                    
-                    buffer = BytesIO()
-                    img_qr.save(buffer, format="PNG")
-                    img_bytes = buffer.getvalue()
-                    
-                    c_qr1, c_qr2 = st.columns([1, 2])
-                    c_qr1.image(img_bytes, caption=f"S/N: {job.get('SN')}", width=150)
-                    c_qr2.write(f"**URL:** {qr_data}")
-                    c_qr2.info("👉 Right-click gambar QR > 'Save Image' untuk print.")
-
-            st.divider()
-            ca, cb = st.columns(2)
+            st.markdown("---")
             wa_url = generate_links("WA", job)
-            ca.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
-            if job.get('Email'): 
-                with cb:
-                    if st.button("📧 Hantar Email + PDF (Auto Server)", key=f"em_{pid}"):
-                        doc = "INVOICE" if job.get('Status') in ['Done', 'Collected'] else "SERVICE"
-                        ok, m = send_email_with_pdf(job.get('Email'), job, generate_pdf(job, doc), "Status.pdf")
-                        if ok:
-                            st.toast(m, icon='✅')
-                        else:
-                            st.error(m)
-            else:
-                cb.caption("Tiada Email.")
-        
-        c_l, c_r = st.columns([1, 2])
-        with c_l:
-            st.download_button("📄 Cetak Tiket", generate_pdf(job, "SERVICE"), "Tiket.pdf")
-            img_str = str(job.get('Image_Link',''))
-            if img_str and img_str != "nan":
-                urls = img_str.split(",")
-                for u in urls:
-                    if u.startswith("http"):
-                        st.image(u, use_container_width=True)
+            st.link_button("📱 WhatsApp Status ke Customer", wa_url, use_container_width=True)
 
-        with c_r:
+        with tab_parts:
             df_p = load_data("Parts")
-            # --- FIX: CHECK IF DATAFRAME HAS DATA & COLUMNS BEFORE FILTERING ---
             if not df_p.empty and 'TicketID' in df_p.columns:
                  parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             else:
                  parts = pd.DataFrame()
             
             kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
+            st.write(f"**Total Kos Part:** RM {kos:.2f}")
             
-            t1, t2 = st.tabs(["Status", "Parts (Stok)"])
-            with t1:
-                st.write(f"**KOS:** RM {kos:.2f}")
-                with st.form("upd_status"):
-                    stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                    
-                    # Warranty Logic for Job
-                    new_note = job.get('Tech_Note','')
-                    if stt in ["Done", "Collected"]:
-                        w_choice = st.radio("Warranty Untuk Job Ini:", ["Tiada", "1 Bulan", "3 Bulan"], horizontal=True)
-                        if w_choice != "Tiada" and "Warranty:" not in new_note:
-                            new_note += f"\n[Warranty: {w_choice}]"
-                    
-                    nt = st.text_area("Solution", value=new_note)
-                    hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
-                    
-                    if st.form_submit_button("UPDATE"):
-                        sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
-                        cl = robust_api_call(sheet.find, str(pid))
-                        if cl:
-                            robust_api_call(sheet.update_cell, cl.row, 12, stt)
-                            robust_api_call(sheet.update_cell, cl.row, 13, kos)
-                            robust_api_call(sheet.update_cell, cl.row, 14, hj)
-                            robust_api_call(sheet.update_cell, cl.row, 16, nt)
-                            st.cache_data.clear()
-                            st.toast("Status Dikemaskini!", icon='🎉')
-                            time.sleep(1)
-                            st.rerun()
-                if stt in ["Done", "Collected"]:
-                    st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
-
-            with t2:
-                if not parts.empty:
-                    st.dataframe(parts[['NamaPart', 'WarrantyBulan', 'TarikhExpire', 'HargaBeli']], use_container_width=True)
-                    d = st.selectbox("Pilih ID untuk Hapus (Guna jika salah masuk):", ["-"] + parts['ID'].tolist())
-                    if d != "-" and st.button("Hapus Part"):
-                        delete_part(d)
-                        st.toast("Part dihapus!", icon='🗑️')
+            if not parts.empty:
+                st.dataframe(parts[['NamaPart', 'HargaBeli']], use_container_width=True)
+                # Delete Part logic
+                d = st.selectbox("Pilih ID Part untuk padam:", ["-"] + parts['ID'].tolist())
+                if d != "-" and st.button("Padam Part"):
+                    delete_part(d)
+                    st.toast("Part dipadam!", icon='🗑️')
+                    time.sleep(1)
+                    st.rerun()
+            else:
+                st.info("Tiada part direkodkan.")
+            
+            st.markdown("---")
+            st.write("### ➕ Guna Part Dari Stok")
+            with st.form("use_part_form", clear_on_submit=True):
+                sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
+                
+                if st.form_submit_button("Guna Part Ini"):
+                    if sel_part != "-":
+                        item_data = stock_options[sel_part]
+                        supplier = item_data.get('Supplier', 'Internal Stock')
+                        # Add to Parts Log (Warranty set to - as it follows Job Warranty)
+                        add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "-", "-", item_data['CostPrice']])
+                        # Deduct Stock
+                        update_stock(item_data['ItemCode'], -1)
+                        st.toast(f"{item_data['ItemName']} ditambah!", icon='✅')
                         time.sleep(1)
                         st.rerun()
-                else:
-                    st.info("Tiada part digunakan.")
+                    else:
+                        st.warning("Pilih part dulu.")
+
+        with tab_qr:
+            st.info("Tampal ini di bawah laptop customer.")
+            my_url = "https://dck-ticketing-system-r7vonv3ctwvxzfh2yqn4s5.streamlit.app"
+            app_url = st.text_input("Link Sistem (Auto-Set)", value=my_url)
+            
+            if app_url and job.get('SN'):
+                if app_url.endswith("/"): app_url = app_url[:-1]
+                qr_data = f"{app_url}/?sn={job.get('SN')}"
+                qr = qrcode.QRCode(box_size=10, border=2)
+                qr.add_data(qr_data)
+                qr.make(fit=True)
+                img_qr = qr.make_image(fill_color="black", back_color="white")
+                buffer = BytesIO()
+                img_qr.save(buffer, format="PNG")
+                img_bytes = buffer.getvalue()
                 
-                st.markdown("---")
-                st.write("### ➕ Guna Part Dari Stok")
-                with st.form("use_part_form", clear_on_submit=True):
-                    sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
-                    
-                    # Warranty option for Part
-                    warr_part = st.radio("Warranty Part (Untuk Client)", [1, 3], horizontal=True, format_func=lambda x: f"{x} Bulan")
-                    
-                    if st.form_submit_button("Guna Part Ini"):
-                        if sel_part != "-":
-                            item_data = stock_options[sel_part]
-                            # Use .get to prevent KeyError if Supplier column is missing/empty
-                            supplier = item_data.get('Supplier', 'Internal Stock')
-                            
-                            exp = (datetime.now() + pd.DateOffset(months=int(warr_part))).strftime("%Y-%m-%d")
-                            
-                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), warr_part, exp, item_data['CostPrice']])
-                            update_stock(item_data['ItemCode'], -1)
-                            st.toast(f"{item_data['ItemName']} ditambah ke Job (Warranty {warr_part} Bulan)!", icon='✅')
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.warning("Pilih part dulu.")
+                c_qr1, c_qr2 = st.columns([1, 2])
+                c_qr1.image(img_bytes, caption=f"S/N: {job.get('SN')}", width=150)
+                c_qr2.write(f"**URL:** {qr_data}")
+                c_qr2.info("👉 Right-click gambar QR > 'Save Image' untuk print.")
 
 # === PAGE: PENGURUSAN STOK (V74: BAKUL RESTOCK SIMPLE) ===
 elif st.session_state.page == "📦 PENGURUSAN STOK":
@@ -982,19 +966,28 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
         st.subheader("1. Maklumat Invoice")
         c1, c2 = st.columns(2)
         inv_no = c1.text_input("No Invoice / Resit Supplier")
-        supp = c2.text_input("Nama Supplier")
+        supp = st.selectbox("Nama Supplier (Dari Master Data)", ["-"] + [x for x in load_data("Ref_Data")[load_data("Ref_Data")['Type']=='Supplier']['Value'].tolist()] + ["Lain-lain"])
+        if supp == "Lain-lain":
+            supp = st.text_input("Masukkan Nama Supplier Baru")
         
         st.markdown("---")
         st.subheader("2. Isi Barang & Tambah ke List")
         
-        df_m = load_data("Master_Inventory")
-        existing_items = df_m['ItemName'].tolist() if not df_m.empty else []
+        # V81: Helper for Standard Part Names
+        ref_df = load_data("Ref_Data")
+        std_parts = ref_df[ref_df['Type'] == 'Part']['Value'].tolist() if not ref_df.empty else []
         
         with st.form("add_to_list_form", clear_on_submit=True):
             c_name, c_qty = st.columns([3, 1])
-            item_input = c_name.text_input("Nama Barang (Taip baru atau copy nama lama)")
-            if not item_input and existing_items:
-                c_name.caption(f"Contoh barang sedia ada: {', '.join(existing_items[:3])}...")
+            
+            # Selectbox for Standard Name
+            part_choice = c_name.selectbox("Pilih Nama Part (Standard)", ["-"] + std_parts + ["Taip Baru..."])
+            
+            item_input = ""
+            if part_choice == "Taip Baru...":
+                item_input = c_name.text_input("Taip Nama Barang Baru (Jika tiada dalam list)")
+            elif part_choice != "-":
+                item_input = part_choice
             
             qty_input = c_qty.number_input("Qty", 1, 1000, 1)
             
@@ -1020,11 +1013,9 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
             st.divider()
             st.subheader("3. Semak & Simpan")
             
-            # Show Table
             cart_df = pd.DataFrame(st.session_state.restock_cart)
             st.dataframe(cart_df, use_container_width=True)
             
-            # Delete Button Logic
             if st.button("❌ Kosongkan List (Reset)"):
                 st.session_state.restock_cart = []
                 st.rerun()
@@ -1040,24 +1031,14 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     
                     for i, item in enumerate(st.session_state.restock_cart):
                         
-                        # V79: Smart Anti-Jamming Logic
-                        # Hanya rehat kalau item ke-5 ke atas untuk elak slow sangat
+                        # V79: Anti-Jamming Sleep
                         if i > 0 and i % 5 == 0:
-                            time.sleep(2) 
+                            time.sleep(1.5)
                         
-                        found_code = None
-                        if not df_m.empty:
-                            match = df_m[df_m['ItemName'].str.lower() == item['ItemName'].lower()]
-                            if not match.empty:
-                                found_code = match.iloc[0]['ItemCode']
+                        # Logic Merge Stock (Based on Name)
+                        check_and_update_master(f"ITM-{int(time.time())}-{i}", item['ItemName'], item['Cost'], item['Sell'], item['Qty'], supp)
                         
-                        if not found_code:
-                            found_code = f"ITM-{int(time.time())}-{i}" # Unique ID
-                        
-                        # 1. Update/Add Master (Added Supplier)
-                        check_and_update_master(found_code, item['ItemName'], item['Cost'], item['Sell'], item['Qty'], supp)
-                        
-                        # 2. Add Log
+                        # Log
                         add_row("Restock_Log", [log_id, tgl, inv_no, supp, item['ItemName'], item['Qty'], item['Cost'], item['Total']])
                         
                         my_bar.progress((i + 1) / len(st.session_state.restock_cart), text=f"Menyimpan {item['ItemName']}...")
@@ -1068,7 +1049,7 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     time.sleep(2)
                     st.rerun()
                 else:
-                    st.error("Sila isi No Invoice dan Nama Supplier di atas (Bahagian 1).")
+                    st.error("Sila isi No Invoice dan Nama Supplier.")
         else:
             st.info("List kosong. Sila isi barang di atas.")
 
@@ -1085,6 +1066,45 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
             st.dataframe(df_r, use_container_width=True)
         else:
             st.info("Tiada rekod pembelian.")
+
+# === PAGE: PENGURUSAN DATA (V81 NEW) ===
+elif st.session_state.page == "🗂️ PENGURUSAN DATA":
+    st.title("🗂️ Pengurusan Data Master")
+    st.info("Daftarkan nama standard barang & supplier di sini supaya list Inventory cantik & tak berterabur.")
+    
+    tab_p, tab_s = st.tabs(["🔧 Nama Parts Standard", "🏢 Nama Supplier"])
+    
+    ref_df = load_data("Ref_Data")
+    
+    with tab_p:
+        st.write("### Tambah Nama Part Baru")
+        with st.form("add_part_std"):
+            new_p = st.text_input("Contoh: iPhone 11 Battery")
+            if st.form_submit_button("Simpan"):
+                if new_p:
+                    add_row("Ref_Data", ["Part", new_p])
+                    st.success(f"{new_p} ditambah!")
+                    time.sleep(1)
+                    st.rerun()
+        
+        st.write("### Senarai Part Standard")
+        if not ref_df.empty:
+            st.dataframe(ref_df[ref_df['Type'] == 'Part'], use_container_width=True)
+
+    with tab_s:
+        st.write("### Tambah Supplier Baru")
+        with st.form("add_supp_std"):
+            new_s = st.text_input("Contoh: Kedai Gadget Seremban")
+            if st.form_submit_button("Simpan"):
+                if new_s:
+                    add_row("Ref_Data", ["Supplier", new_s])
+                    st.success(f"{new_s} ditambah!")
+                    time.sleep(1)
+                    st.rerun()
+        
+        st.write("### Senarai Supplier")
+        if not ref_df.empty:
+            st.dataframe(ref_df[ref_df['Type'] == 'Supplier'], use_container_width=True)
 
 # === PAGE: HISTORY DEVICE ===
 elif st.session_state.page == "🔎 HISTORY DEVICE":
