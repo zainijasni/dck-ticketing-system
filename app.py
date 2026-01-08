@@ -84,6 +84,7 @@ def safe_int(val):
         return 0
 
 def robust_api_call(func, *args, **kwargs):
+    """Fungsi ini cuba panggil API 3 kali jika gagal"""
     for i in range(3):
         try:
             return func(*args, **kwargs)
@@ -104,7 +105,7 @@ def clean_phone_number_my(phone_input):
         return "6" + p
 
 # =============================================================================
-# 3. DATABASE ENGINE
+# 3. DATABASE ENGINE (Google Sheets)
 # =============================================================================
 @st.cache_resource
 def get_client():
@@ -113,6 +114,7 @@ def get_client():
     return gspread.authorize(creds)
 
 def init_db():
+    """Pastikan semua Tab wujud dengan Header yang betul"""
     if 'db_checked' in st.session_state:
         return
     try:
@@ -177,6 +179,7 @@ def init_db():
         pass
 
 def load_data(tab_name):
+    # PENTING: Tiada caching di sini supaya data sentiasa fresh
     init_db()
     client = get_client()
     try:
@@ -184,6 +187,7 @@ def load_data(tab_name):
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
+        # Kalau DataFrame kosong, kita paksa letak Header
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -196,8 +200,10 @@ def load_data(tab_name):
             elif tab_name == "Restock_Log":
                  df = pd.DataFrame(columns=["LogID", "Date", "InvoiceNo", "Supplier", "ItemName", "QtyAdded", "CostPrice", "TotalCost"])
 
+        # Patch column email jika tiada (untuk backward compatibility)
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
+            
         return df
     except:
         return pd.DataFrame()
@@ -224,7 +230,7 @@ def add_row(tab_name, row):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
     robust_api_call(sheet.append_row, row)
-    st.cache_data.clear()
+    # Clear cache removed here since we removed global cache on load_data
 
 def update_cell_data(tab_name, id_val, col_dict):
     client = get_client()
@@ -233,7 +239,6 @@ def update_cell_data(tab_name, id_val, col_dict):
     if cell:
         for col_idx, val in col_dict.items():
             robust_api_call(sheet.update_cell, cell.row, col_idx, val)
-        st.cache_data.clear()
         return True
     return False
 
@@ -243,7 +248,6 @@ def delete_row_data(tab_name, id_val):
     cell = robust_api_call(sheet.find, str(id_val))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row)
-        st.cache_data.clear()
         return True
     return False
 
@@ -258,7 +262,6 @@ def update_stock(item_code, qty_change):
             curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock
             new_qty = curr + int(qty_change)
             sheet.update_cell(cell.row, 5, new_qty)
-            st.cache_data.clear()
             return True
     except:
         pass
@@ -280,7 +283,6 @@ def check_and_update_master(code, name, cost, sell, qty, supplier):
             # Create new
             tgl = datetime.now().strftime("%Y-%m-%d")
             sheet.append_row([code, name, cost, sell, qty, supplier, tgl])
-        st.cache_data.clear()
         return True
     except:
         return False
@@ -297,7 +299,6 @@ def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
         sheet.update_cell(cell.row, 7, sn)
         sheet.update_cell(cell.row, 8, pwd)
         sheet.update_cell(cell.row, 9, masalah)
-        st.cache_data.clear()
         return True
     return False
 
@@ -307,7 +308,6 @@ def delete_part(part_id):
     cell = robust_api_call(sheet.find, str(part_id))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row)
-        st.cache_data.clear()
         return True
     return False
 
@@ -416,6 +416,7 @@ def generate_pdf(t, type="SERVICE"):
         for itm in items:
             p.drawString(350, y, str(itm.get('Qty', 1)))
             p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
+            # Papar Warranty di Resit
             desc_text = f"{str(itm.get('Item', '-'))} (W: {itm.get('Warranty','-')})"
             y_item = draw_wrapped_text(p, desc_text, 50, y, 280)
             y = y_item - 10
@@ -628,6 +629,7 @@ if st.session_state.page == "📊 DASHBOARD":
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     
+    # V69: Read options from Config (Dynamic Checkbox)
     opt_mslh = [x.strip() for x in st.session_state.config.get("Options_Masalah", "Slow, Screen, Battery").split(",")]
     opt_fiz = [x.strip() for x in st.session_state.config.get("Options_Fizikal", "Calar, Pecah").split(",")]
     opt_acc = [x.strip() for x in st.session_state.config.get("Options_Aksesori", "Bag, Charger").split(",")]
@@ -689,7 +691,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 else:
                     st.error(m)
 
-# === PAGE: JUALAN KEDAI ===
+# === PAGE: JUALAN KEDAI (V74 - SIMPLE & BULK) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     df_m = load_data("Master_Inventory")
@@ -789,6 +791,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
     if not df_m.empty:
         for idx, row in df_m.iterrows():
             if safe_int(row['CurrentStock']) > 0:
+                # Format: ItemName (Stok: 5) - Cost: RM50
                 stock_options[f"{row['ItemName']} (Stok: {row['CurrentStock']}) - Cost: RM{row['CostPrice']}"] = row
 
     if not df.empty:
@@ -878,6 +881,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
         with c_r:
             df_p = load_data("Parts")
+            # Filter parts based on TicketID
             if not df_p.empty and 'TicketID' in df_p.columns:
                  parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             else:
@@ -891,6 +895,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 with st.form("upd_status"):
                     stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
                     
+                    # Warranty Logic for Job
                     new_note = job.get('Tech_Note','')
                     if stt in ["Done", "Collected"]:
                         w_choice = st.radio("Warranty Untuk Job Ini:", ["Tiada", "1 Bulan", "3 Bulan"], horizontal=True)
@@ -931,19 +936,27 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 st.write("### ➕ Guna Part Dari Stok")
                 with st.form("use_part_form", clear_on_submit=True):
                     sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
+                    
+                    # Warranty option for Part
+                    warr_part = st.radio("Warranty Part (Untuk Client)", [1, 3], horizontal=True, format_func=lambda x: f"{x} Bulan")
+                    
                     if st.form_submit_button("Guna Part Ini"):
                         if sel_part != "-":
                             item_data = stock_options[sel_part]
+                            # Use .get to prevent KeyError if Supplier column is missing/empty
                             supplier = item_data.get('Supplier', 'Internal Stock')
-                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "0", "-", item_data['CostPrice']])
+                            
+                            exp = (datetime.now() + pd.DateOffset(months=int(warr_part))).strftime("%Y-%m-%d")
+                            
+                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), warr_part, exp, item_data['CostPrice']])
                             update_stock(item_data['ItemCode'], -1)
-                            st.toast(f"{item_data['ItemName']} ditambah ke Job!", icon='✅')
+                            st.toast(f"{item_data['ItemName']} ditambah ke Job (Warranty {warr_part} Bulan)!", icon='✅')
                             time.sleep(1)
                             st.rerun()
                         else:
                             st.warning("Pilih part dulu.")
 
-# === PAGE: PENGURUSAN STOK ===
+# === PAGE: PENGURUSAN STOK (V74: BAKUL RESTOCK SIMPLE) ===
 elif st.session_state.page == "📦 PENGURUSAN STOK":
     st.title("📦 Pengurusan Stok (Inventory)")
     t_restock, t_master, t_log = st.tabs(["📥 Masuk Stok (Restock)", "📋 Master List", "📜 Log Pembelian"])
@@ -1009,6 +1022,8 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     my_bar = st.progress(0, text=progress_text)
                     
                     for i, item in enumerate(st.session_state.restock_cart):
+                        # Generate Code (Simple Hash based on name to keep consistent or Create New)
+                        # Check if exists in Master
                         found_code = None
                         if not df_m.empty:
                             match = df_m[df_m['ItemName'].str.lower() == item['ItemName'].lower()]
