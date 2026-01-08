@@ -15,7 +15,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-import qrcode # Library baru untuk QR
+import qrcode # Library wajib untuk QR
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="DCK Tech System", layout="wide")
@@ -605,6 +605,32 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 c1.write(f"**Nama:** {job.get('Customer','-')}"); c1.write(f"**Model:** {job.get('Model','-')}")
                 c1.write(f"**Phone:** {job.get('Phone','-')}"); c1.write(f"**S/N:** {job.get('SN','-')}")
                 c2.write(f"**Masalah:** {job.get('Masalah','-')}"); c2.error(f"🔐 PWD: {job.get('Password','-')}")
+
+            st.divider()
+            
+            # --- 🖨️ V67: QR CODE STICKER GENERATOR ---
+            with st.expander("🖨️ GENERATE QR STICKER (HEALTH CARD)"):
+                st.info("Tampal ini di bawah laptop customer.")
+                # User kena masukkan link sekali je, atau hardcode sini.
+                app_url = st.text_input("Link Sistem Anda (Copy dari Browser)", value="https://dck-app.streamlit.app")
+                
+                if app_url and job.get('SN'):
+                    # Clean slash
+                    if app_url.endswith("/"): app_url = app_url[:-1]
+                    # Create Link
+                    qr_data = f"{app_url}/?sn={job.get('SN')}"
+                    
+                    # Create QR
+                    qr = qrcode.QRCode(box_size=10, border=2)
+                    qr.add_data(qr_data)
+                    qr.make(fit=True)
+                    img_qr = qr.make_image(fill_color="black", back_color="white")
+                    
+                    c_qr1, c_qr2 = st.columns([1, 2])
+                    c_qr1.image(img_qr.get_image(), caption=f"S/N: {job.get('SN')}", width=150)
+                    c_qr2.write(f"**URL:** {qr_data}")
+                    c_qr2.info("👉 Right-click gambar QR > 'Save Image' untuk print.")
+            # ------------------------------------------
 
             st.divider()
             ca, cb = st.columns(2)
