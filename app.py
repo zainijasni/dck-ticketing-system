@@ -211,15 +211,15 @@ def generate_pdf(t, type="SERVICE"):
     y -= 30; p.drawString(50, y, "Customer Signature: _________________"); p.drawString(300, y, "Authorized Signature: _________________")
     p.save(); buffer.seek(0); return buffer
 
-# --- 5. EMAIL & LINKS ---
+# --- 5. EMAIL & LINKS (V54 SAFE VERSION) ---
 def generate_message_content(data):
-    cust = data.get('Customer', 'Pelanggan')
-    status = data.get('Status', 'Pending')
-    tid = data.get('ID', '-')
-    model = data.get('Model', '-')
-    sn = data.get('SN', '-')
-    masalah = data.get('Masalah', '-')
-    note = data.get('Tech_Note', '-')
+    cust = str(data.get('Customer', 'Pelanggan'))
+    status = str(data.get('Status', 'Pending'))
+    tid = str(data.get('ID', '-'))
+    model = str(data.get('Model', '-'))
+    sn = str(data.get('SN', '-'))
+    masalah = str(data.get('Masalah', '-'))
+    note = str(data.get('Tech_Note', '-'))
     price = safe_float(data.get('Harga_Jual', 0))
     company = st.session_state.config.get('Company_Name', 'DCK TECH')
 
@@ -264,8 +264,6 @@ if sel != st.session_state.page: st.session_state.page = sel; st.rerun()
 if st.session_state.page == "📊 DASHBOARD":
     st.title("📊 DCK Tech Dashboard")
     df = load_data("Tickets"); df_s = load_data("Sales")
-    
-    # SALES TODAY
     today_str = datetime.now().strftime("%Y-%m-%d")
     sales_today = 0.0
     if not df_s.empty: sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
@@ -277,30 +275,26 @@ if st.session_state.page == "📊 DASHBOARD":
         c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
         c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
     
-    st.divider()
-    st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
+    st.divider(); st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
     
-    # CARI TIKET (SENTIASA ADA)
     st.write("### 🔍 Cari Ticket")
     search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
-    
     st.write("### Senarai Job Terkini")
     if not df.empty:
-        # FILTER LOGIC
-        if search:
-            df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
-            
+        if search: df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
         for _, row in df.iloc[::-1].head(10).iterrows():
-            with st.expander(f"{row.get('ID', '-')} - {row.get('Customer', '-')} ({row.get('Status', '-')})"):
-                st.write(f"Model: {row.get('Model', '-')} | Masalah: {row.get('Masalah', '-')}")
+            with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
+                st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
                 if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
                     st.session_state.selected_id = row.get('ID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
     else: st.info("Tiada rekod tiket.")
 
-# === PAGE: DAFTAR TIKET ===
+# === PAGE: DAFTAR TIKET (AUTO-CLEAR FORM) ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
-    with st.container(border=True):
+    
+    # GUNA FORM DENGAN CLEAR_ON_SUBMIT = TRUE
+    with st.form("reg_ticket", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("### 👤 Pelanggan")
@@ -317,19 +311,24 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         img = st.file_uploader("Gambar Peranti", accept_multiple_files=True)
         tnc = st.checkbox("Saya setuju dengan Terma & Syarat")
         
-        if st.button("SIMPAN REKOD", use_container_width=True):
+        submitted = st.form_submit_button("SIMPAN REKOD", use_container_width=True)
+        
+        if submitted:
             if nama and tnc:
-                tid = f"DCK-{datetime.now().strftime('%d%H%M')}"
-                img_str = ""
-                if img: 
-                    try: img_str = ",".join([cloudinary.uploader.upload(f)['secure_url'] for f in img])
-                    except: pass
-                
-                row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, email, model, sn, pwd, ",".join(mslh), ",".join(fiz), ",".join(acc), "Pending", 0, 0, img_str, note]
-                add_row("Tickets", row)
-                st.toast("Tiket Berjaya Dibuka!", icon='✅')
-                st.session_state.last_data = {"ID": tid, "Customer": nama, "Phone": phone, "Email": email, "Model": model, "SN": sn, "Masalah": ",".join(mslh), "Fizikal": ",".join(fiz), "Aksesori": ",".join(acc), "Tech_Note": note, "Status": "Pending", "Images": img_str, "Image_Link": img_str, "Tarikh": row[1]}
-                time.sleep(1); st.rerun()
+                with st.spinner("Menyimpan..."):
+                    tid = f"DCK-{datetime.now().strftime('%d%H%M')}"
+                    img_str = ""
+                    if img: 
+                        try: img_str = ",".join([cloudinary.uploader.upload(f)['secure_url'] for f in img])
+                        except: pass
+                    
+                    row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, email, model, sn, pwd, ",".join(mslh), ",".join(fiz), ",".join(acc), "Pending", 0, 0, img_str, note]
+                    add_row("Tickets", row)
+                    st.toast("Tiket Berjaya Dibuka!", icon='✅')
+                    
+                    # Simpan data di session utk butang action, sbb form akan clear
+                    st.session_state.last_data = {"ID": tid, "Customer": nama, "Phone": phone, "Email": email, "Model": model, "SN": sn, "Masalah": ",".join(mslh), "Fizikal": ",".join(fiz), "Aksesori": ",".join(acc), "Tech_Note": note, "Status": "Pending", "Images": img_str, "Image_Link": img_str, "Tarikh": row[1]}
+                    time.sleep(1); st.rerun()
 
     if 'last_data' in st.session_state:
         ld = st.session_state.last_data
@@ -340,30 +339,33 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         if ld['Email']: 
             if c3.button("📧 Email Auto"):
                 ok, m = send_email_with_pdf(ld['Email'], ld, generate_pdf(ld, "SERVICE"), "Tiket.pdf")
-                if ok: st.toast(m)
+                if ok: st.toast(m, icon='✅')
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI ===
+# === PAGE: JUALAN KEDAI (AUTO-CLEAR FORM) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     tab_pos, tab_manage = st.tabs(["🛒 Jualan Baru", "📋 Urus Jualan"])
     
     with tab_pos:
-        with st.container(border=True):
+        with st.form("pos_form", clear_on_submit=True):
             c1, c2 = st.columns(2)
             item = c1.text_input("Nama Barang"); cust = c2.text_input("Nama Pelanggan", value="Walk-in")
             c3, c4, c5 = st.columns(3)
             qty = c3.number_input("Qty", 1, 100, 1); price = c4.number_input("Harga Unit (RM)", 0.0)
-            total = qty * price
-            c5.metric("TOTAL", f"RM {total:.2f}")
             pay = st.selectbox("Bayaran", ["Cash", "QR", "Transfer"])
-            if st.button("✅ REKOD"):
-                if item and total > 0:
+            
+            sub = st.form_submit_button("✅ REKOD JUALAN")
+            
+            if sub:
+                if item and price > 0:
+                    total = qty * price
                     sid = f"SALE-{datetime.now().strftime('%d%H%M')}"
                     add_row("Sales", [sid, datetime.now().strftime("%Y-%m-%d"), item, qty, price, total, cust, pay])
                     st.toast("Jualan Direkod!", icon='💰')
                     st.session_state.last_sale = {"ID": sid, "Tarikh": datetime.now().strftime("%Y-%m-%d"), "Item": item, "Qty": qty, "Harga_Unit": price, "Total": total, "Customer": cust}
                     time.sleep(1); st.rerun()
+                    
         if 'last_sale' in st.session_state:
             st.download_button("🖨️ Resit", generate_pdf(st.session_state.last_sale, "SALES"), "Resit.pdf", use_container_width=True)
 
@@ -371,7 +373,7 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
         df_s = load_data("Sales")
         if not df_s.empty:
             st.dataframe(df_s)
-            sale_id = st.selectbox("Pilih ID Jualan untuk Edit/Hapus:", ["-"] + df_s['ID'].tolist())
+            sale_id = st.selectbox("Pilih ID Jualan:", ["-"] + df_s['ID'].tolist())
             if sale_id != "-":
                 curr = df_s[df_s['ID'] == sale_id].iloc[0]
                 with st.form("edit_sale"):
@@ -382,7 +384,7 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     if c_del.form_submit_button("🗑️ Hapus"): delete_row_data("Sales", sale_id); st.rerun()
                     if c_upd.form_submit_button("💾 Update"):
                         update_cell_data("Sales", sale_id, {3: e_item, 4: e_qty, 5: e_price, 6: e_qty * e_price})
-                        st.success("Updated!"); st.rerun()
+                        st.toast("Jualan Dikemaskini!", icon='✅'); time.sleep(1); st.rerun()
 
 # === PAGE: UPDATE STATUS ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
@@ -403,7 +405,8 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     sn = st.text_input("SN", job.get('SN')); pw = st.text_input("Pwd", job.get('Password'))
                     ms = st.text_area("Masalah", job.get('Masalah'))
                     if st.form_submit_button("Simpan"):
-                        update_customer_info_db(pid, nm, ph, em, md, sn, pw, ms); st.rerun()
+                        update_customer_info_db(pid, nm, ph, em, md, sn, pw, ms)
+                        st.toast("Info Berjaya Disimpan!", icon='✅'); time.sleep(1); st.rerun()
             else:
                 st.write(f"**{job.get('Customer')}** | {job.get('Model')} | {job.get('Masalah')}")
                 st.error(f"PWD: {job.get('Password')}")
@@ -412,7 +415,9 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 if job.get('Email'): 
                     if c2.button("Email Auto"): 
                         doc = "INVOICE" if job.get('Status') in ['Done', 'Collected'] else "SERVICE"
-                        send_email_with_pdf(job.get('Email'), job, generate_pdf(job, doc), "Status.pdf")
+                        ok, m = send_email_with_pdf(job.get('Email'), job, generate_pdf(job, doc), "Status.pdf")
+                        if ok: st.toast(m, icon='✅')
+                        else: st.error(m)
 
         c_l, c_r = st.columns([1, 2])
         with c_l:
@@ -433,39 +438,29 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     s = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
                     n = st.text_area("Nota", job.get('Tech_Note')); h = st.number_input("Harga Jual", safe_float(job.get('Harga_Jual')))
                     if st.form_submit_button("Update"):
-                        update_cell_data("Tickets", pid, {11: s, 12: kos, 13: h, 15: n}); st.rerun()
+                        update_cell_data("Tickets", pid, {11: s, 12: kos, 13: h, 15: n})
+                        st.toast("Status Dikemaskini!", icon='🎉'); time.sleep(1); st.rerun()
                 if s in ["Done", "Collected"]: st.download_button("Print Invois", generate_pdf(job, "INVOICE"), "Invois.pdf")
 
             with t2:
+                # AUTO CLEAR FORM UNTUK PART
                 with st.form("ap", clear_on_submit=True):
                     pn = st.text_input("Part"); ps = st.text_input("Supp"); w = st.number_input("Warr", 1); pr = st.number_input("Harga", 0.0)
                     if st.form_submit_button("Add"):
                         exp = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
-                        add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), w, exp, pr]); st.rerun()
+                        add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), w, exp, pr])
+                        st.toast("Part ditambah!", icon='➕'); time.sleep(1); st.rerun()
+                        
                 if not parts.empty:
                     st.dataframe(parts[['ID', 'NamaPart', 'HargaBeli']])
                     d = st.selectbox("Del", ["-"]+parts['ID'].tolist())
-                    if d != "-" and st.button("Delete"): delete_part(d); st.rerun()
+                    if d != "-" and st.button("Delete"): 
+                        delete_part(d); st.toast("Part dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
 
-# === PAGE: INVENTORY ===
+# === PAGE: INVENTORY & LAPORAN ===
 elif st.session_state.page == "📦 INVENTORY":
-    st.title("📦 Inventory Log")
-    df_p = load_data("Parts")
-    search_p = st.text_input("🔍 Cari Part (Nama/Ticket ID):")
-    
-    if not df_p.empty:
-        if search_p:
-            df_p = df_p[df_p.apply(lambda r: r.astype(str).str.contains(search_p, case=False).any(), axis=1)]
-            
-        for i, row in df_p.iterrows():
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                c1.write(f"**{row.get('NamaPart')}** (RM {row.get('HargaBeli')}) | Ticket: {row.get('TicketID')}")
-                if c2.button("Go to Job", key=f"inv_{row.get('ID')}"):
-                    st.session_state.selected_id = row.get('TicketID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
-    else: st.info("Tiada barang.")
+    st.title("📦 Inventory Log"); df_p = load_data("Parts"); st.dataframe(df_p)
 
-# === PAGE: LAPORAN ===
 elif st.session_state.page == "📈 LAPORAN":
     st.title("📈 Laporan Prestasi")
     df = load_data("Tickets"); df_s = load_data("Sales"); df_p = load_data("Parts")
@@ -518,11 +513,11 @@ elif st.session_state.page == "⚙️ TETAPAN":
         if st.form_submit_button("Simpan"):
             new_c = st.session_state.config.copy()
             new_c.update({"Company_Name":cn, "Address":ad, "Phone":ph, "TNC_Ticket":tnc1, "TNC_Invoice":tnc2})
-            save_config_to_db(new_c); st.success("Saved!")
+            save_config_to_db(new_c); st.toast("Tetapan Disimpan!", icon='✅')
     
     with st.expander("📧 Email Server"):
         with st.form("em"):
             eu = st.text_input("Email", st.session_state.email_user)
             ep = st.text_input("App Password", st.session_state.email_pass, type="password")
             if st.form_submit_button("Set Email"):
-                st.session_state.email_user = eu; st.session_state.email_pass = ep; st.success("Email Set!")
+                st.session_state.email_user = eu; st.session_state.email_pass = ep; st.toast("Email Disimpan!", icon='✅')
