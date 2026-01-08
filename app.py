@@ -15,6 +15,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
+import qrcode # Library baru untuk QR
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="DCK Tech System", layout="wide")
@@ -33,7 +34,7 @@ if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 if 'email_user' not in st.session_state: st.session_state.email_user = ""
 if 'email_pass' not in st.session_state: st.session_state.email_pass = ""
-if 'pos_cart' not in st.session_state: st.session_state.pos_cart = [] # BAKUL JUALAN
+if 'pos_cart' not in st.session_state: st.session_state.pos_cart = []
 if 'config' not in st.session_state:
     st.session_state.config = {
         "Company_Name": "DCK TECH SERVICES",
@@ -209,7 +210,6 @@ def generate_pdf(t, type="SERVICE"):
     w, h = A4
     cfg = st.session_state.config
     
-    # 1. HEADER & LOGO
     logo_url = cfg.get("Logo", "")
     if logo_url and len(logo_url) > 10:
         try:
@@ -226,7 +226,6 @@ def generate_pdf(t, type="SERVICE"):
     p.setLineWidth(1.5)
     p.line(40, h-110, w-40, h-110)
     
-    # 2. TITLE & INFO
     p.setFont("Helvetica-Bold", 14)
     doc_title = "SERVICE TICKET" if type == "SERVICE" else "OFFICIAL RECEIPT"
     if type == "INVOICE": doc_title = "OFFICIAL INVOICE"
@@ -237,55 +236,46 @@ def generate_pdf(t, type="SERVICE"):
     p.setFont("Helvetica-Bold", 10); p.drawString(50, h-155, "CUSTOMER DETAILS:")
     p.setFont("Helvetica", 10)
     
-    if 'Model' in t: # Service Ticket
+    if 'Model' in t: 
         p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}"); p.drawString(300, h-175, f"Ticket ID: {t.get('ID', '-')}")
         p.drawString(50, h-190, f"Phone: {t.get('Phone', '-')}"); p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
         p.drawString(50, h-205, f"Email: {t.get('Email', '-')}"); p.drawString(300, h-205, f"S/N: {t.get('SN', '-')}")
-    else: # Sales Receipt (Multi-Item)
+    else: 
         p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}")
         p.drawString(300, h-175, f"Receipt ID: {t.get('ID', '-')}")
         p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
 
-    # 3. CONTENT TABLE
     y = h-250
     p.setFont("Helvetica-Bold", 11)
     p.setFillColorRGB(0.9, 0.9, 0.9)
     p.rect(40, y, w-80, 20, fill=1)
     p.setFillColorRGB(0, 0, 0)
     
-    if 'Model' in t: # --- TIKET SERVICE ---
+    if 'Model' in t: 
         p.drawString(50, y+6, "DEVICE / MODEL"); p.drawString(250, y+6, "DIAGNOSIS / PROBLEM"); p.drawString(450, y+6, "REMARKS")
         y -= 25
-        
         y_model = draw_wrapped_text(p, t.get('Model', '-'), 50, y, 180)
         y_prob = draw_wrapped_text(p, t.get('Masalah', '-'), 250, y, 180)
         y_note = draw_wrapped_text(p, t.get('Tech_Note', '-'), 450, y, 100)
-        
         y = min(y_model, y_prob, y_note) - 15
         p.line(40, y, w-40, y)
-        
         y -= 20
         p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "Condition & Accessories:")
         p.setFont("Helvetica", 10); p.drawString(200, y, f"{t.get('Fizikal', '-')} | {t.get('Aksesori', '-')}")
         
-    else: # --- MULTI-ITEM SALES ---
+    else: 
         p.drawString(50, y+6, "ITEM DESCRIPTION"); p.drawString(350, y+6, "QTY"); p.drawString(450, y+6, "PRICE")
         y -= 25
         p.setFont("Helvetica", 10)
-        
         items = t.get('Items_List', [])
-        if not items:
-            items = [{'Item': t.get('Item'), 'Qty': t.get('Qty'), 'Harga_Unit': t.get('Harga_Unit')}]
-            
+        if not items: items = [{'Item': t.get('Item'), 'Qty': t.get('Qty'), 'Harga_Unit': t.get('Harga_Unit')}]
         for itm in items:
             p.drawString(350, y, str(itm.get('Qty', 1)))
             p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
             y_item = draw_wrapped_text(p, str(itm.get('Item', '-')), 50, y, 280)
             y = y_item - 10
-            
         p.line(40, y, w-40, y)
 
-    # 4. TOTAL & FOOTER
     if type in ["INVOICE", "SALES"] or t.get('Status') in ['Done', 'Collected']:
         total = safe_float(t.get('Harga_Jual', t.get('Total', 0)))
         y -= 30
@@ -296,20 +286,14 @@ def generate_pdf(t, type="SERVICE"):
     p.line(40, y_footer, w-40, y_footer)
     p.setFont("Helvetica-Bold", 9); p.drawString(40, y_footer-15, "TERMS & CONDITIONS:")
     p.setFont("Helvetica", 8)
-    
     tnc_text = cfg.get("TNC_Invoice", "") if type in ["INVOICE", "SALES"] else cfg.get("TNC_Ticket", "")
     curr_y = y_footer - 30
     for line in tnc_text.split('\n'):
-        p.drawString(40, curr_y, line.strip())
-        curr_y -= 12
-        
+        p.drawString(40, curr_y, line.strip()); curr_y -= 12
     y_sig = 50
     p.line(50, y_sig, 200, y_sig); p.line(350, y_sig, 500, y_sig)
     p.drawString(50, y_sig-15, "Customer Signature"); p.drawString(350, y_sig-15, "Technician / Manager")
-    
-    p.save()
-    buffer.seek(0)
-    return buffer
+    p.save(); buffer.seek(0); return buffer
 
 # --- 5. EMAIL & LINKS ---
 def generate_message_content(data):
@@ -356,9 +340,92 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
         return True, "Berjaya!"
     except Exception as e: return False, str(e)
 
+
+# =============================================================================
+# 🚦 V66 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (TRAFFIC LIGHT)
+# Code ini diletakkan di SINI supaya function 'load_data' kat atas dah boleh guna.
+# =============================================================================
+
+# Dapatkan parameter dari URL (Contoh: ?sn=A123)
+query_params = st.query_params 
+sn_query = query_params.get("sn", None)
+
+if sn_query:
+    # --- MOD PUBLIC (DIGITAL HEALTH CARD) ---
+    # 1. Sorok menu Admin supaya orang luar tak boleh tekan
+    st.markdown("""
+    <style>
+        [data-testid="stSidebar"] {display: none;}
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # 2. Setup Database & Config
+    load_config()
+    cfg = st.session_state.config
+    
+    # 3. Header
+    c_logo, c_title = st.columns([1, 4])
+    with c_title:
+        st.title(f"🛡️ {cfg.get('Company_Name', 'DCK TECH')} - Health Card")
+        st.caption("Verifikasi Status & Sejarah Peranti Digital")
+    st.divider()
+
+    # 4. Cari Data
+    with st.spinner(f"🔍 Menyemak rekod untuk S/N: {sn_query}..."):
+        df = load_data("Tickets")
+        
+    found = False
+    if not df.empty:
+        # Cari SN (Case Insensitive & Buang Whitespace)
+        # Kita ambil semua rekod berkaitan SN ni
+        history = df[df['SN'].astype(str).str.strip().str.upper() == str(sn_query).strip().upper()]
+        
+        if not history.empty:
+            found = True
+            # Ambil data paling latest (rekod terakhir)
+            latest = history.iloc[-1]
+            
+            # --- DISPLAY UTAMA (PUBLIC VIEW) ---
+            st.success("✅ Peranti Sah & Berdaftar")
+            
+            # Kad Info (Tanpa Data Sensitif Customer)
+            with st.container(border=True):
+                c1, c2 = st.columns(2)
+                c1.write(f"**Model:** {latest.get('Model')}")
+                c1.write(f"**S/N:** {latest.get('SN')}")
+                c2.write(f"**Status Terkini:** {latest.get('Status')}")
+                c2.write(f"**Tarikh Servis:** {latest.get('Tarikh')}")
+                
+                st.markdown("---")
+                st.write("**Sejarah Isu & Pembaikan:**")
+                st.info(f"{latest.get('Masalah')}")
+                st.write(f"*Nota Tech: {latest.get('Tech_Note', '-')}")
+
+            # Sejarah Servis Terdahulu (Jika ada lebih dari 1)
+            if len(history) > 1:
+                with st.expander(f"📜 Lihat Sejarah Servis Terdahulu ({len(history)} rekod)"):
+                    st.dataframe(
+                        history[['Tarikh', 'Masalah', 'Status']].sort_values(by='Tarikh', ascending=False),
+                        hide_index=True,
+                        use_container_width=True
+                    )
+            
+            st.caption(f"Disahkan oleh sistem {cfg.get('Company_Name')}")
+
+    if not found:
+        st.error(f"❌ Maaf, tiada rekod dijumpai untuk S/N: {sn_query}")
+        st.warning("Sila pastikan Serial Number dimasukkan dengan betul atau hubungi kedai kami.")
+
+    # 5. STOP EXECUTION - Jangan load dashboard admin di bawah
+    st.stop()
+# =============================================================================
+
+
 # --- 6. NAVIGATION ---
 load_config()
-PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🛒 JUALAN KEDAI", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN", "⚙️ TETAPAN"]
+PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🛒 JUALAN KEDAI", "🔧 UPDATE STATUS", "📦 INVENTORY", "🔎 HISTORY DEVICE", "📈 LAPORAN", "⚙️ TETAPAN"]
 try: idx = PAGES.index(st.session_state.page)
 except: idx = 0
 sel = st.sidebar.radio("NAVIGASI", PAGES, index=idx)
@@ -443,13 +510,12 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m, icon='✅')
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI (EASY DELETE UPDATE) ===
+# === PAGE: JUALAN KEDAI (V64 - QUICK DELETE) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     tab_pos, tab_manage = st.tabs(["🛒 Kaunter Bayaran", "📋 Rekod Jualan"])
     
     with tab_pos:
-        # 1. ADD ITEM
         with st.container(border=True):
             st.subheader("➕ Tambah Barang")
             with st.form("add_item_form", clear_on_submit=True):
@@ -461,27 +527,24 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     st.session_state.pos_cart.append({"Item": item, "Qty": qty, "Harga_Unit": price, "Total": qty * price})
                     st.toast(f"{item} ditambah!", icon='🛒')
         
-        # 2. CART LIST & QUICK DELETE
         if st.session_state.pos_cart:
             st.divider()
             st.subheader("🛍️ Bakul Jualan")
-            
-            # --- NEW UI: LIST WITH DELETE BUTTONS ---
             st.markdown("---")
+            
+            # --- NEW QUICK DELETE UI ---
             for i, row in enumerate(st.session_state.pos_cart):
                 c1, c2, c3, c4 = st.columns([3, 1, 1, 0.5])
                 c1.write(f"**{row['Item']}**")
                 c2.write(f"x {row['Qty']}")
                 c3.write(f"RM {row['Total']:.2f}")
-                # Tombol X Merah
-                if c4.button("❌", key=f"del_cart_{i}"):
+                if c4.button("❌", key=f"del_{i}"):
                     st.session_state.pos_cart.pop(i)
-                    st.rerun() # Refresh terus lepas delete
+                    st.rerun()
+            # ---------------------------
+            
             st.markdown("---")
-            # ----------------------------------------
-
-            cart_df = pd.DataFrame(st.session_state.pos_cart)
-            grand_total = cart_df['Total'].sum() if not cart_df.empty else 0
+            grand_total = sum([x['Total'] for x in st.session_state.pos_cart])
             st.metric("GRAND TOTAL", f"RM {grand_total:.2f}")
             
             with st.form("checkout_form"):
@@ -494,7 +557,6 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     tgl = datetime.now().strftime("%Y-%m-%d")
                     for row in st.session_state.pos_cart:
                         add_row("Sales", [sid, tgl, row['Item'], row['Qty'], row['Harga_Unit'], row['Total'], cust_name, pay_method])
-                    
                     st.session_state.last_sale = {"ID": sid, "Tarikh": tgl, "Customer": cust_name, "Total": grand_total, "Items_List": st.session_state.pos_cart}
                     st.session_state.pos_cart = []
                     st.toast("Transaksi Berjaya!", icon='💰')
@@ -504,10 +566,8 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                 st.session_state.pos_cart = []
                 st.rerun()
 
-        # 3. RECEIPT
         if 'last_sale' in st.session_state and st.session_state.last_sale:
-            st.divider()
-            st.success("Transaksi Selesai.")
+            st.divider(); st.success("Transaksi Selesai.")
             st.download_button("🖨️ CETAK RESIT", generate_pdf(st.session_state.last_sale, "SALES"), "Resit_Jualan.pdf", use_container_width=True)
 
     with tab_manage:
@@ -600,7 +660,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
             with t2:
                 pt_list, pt_add, pt_edit = st.tabs(["📋 List", "➕ Tambah", "✏️ Edit"])
-                
                 with pt_list:
                     if not parts.empty:
                         st.dataframe(parts[['NamaPart', 'TarikhExpire', 'HargaBeli']], use_container_width=True)
@@ -608,7 +667,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                         if d != "-" and st.button("Hapus Part"):
                             delete_part(d); st.toast("Part dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
                     else: st.info("Tiada part.")
-
                 with pt_add:
                     with st.form("add_part_form", clear_on_submit=True):
                         pn = st.text_input("Nama Part"); ps = st.text_input("Supplier")
@@ -617,7 +675,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             exp = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
                             add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), w, exp, pr])
                             st.toast("Part ditambah!", icon='➕'); time.sleep(1); st.rerun()
-
                 with pt_edit:
                     if not parts.empty:
                         eid = st.selectbox("Pilih Part untuk Edit:", parts['ID'].tolist())
@@ -635,7 +692,6 @@ elif st.session_state.page == "📦 INVENTORY":
     st.title("📦 Inventory Log")
     df_p = load_data("Parts")
     search_p = st.text_input("🔍 Cari Part (Nama/Ticket ID):")
-    
     if not df_p.empty:
         if search_p: df_p = df_p[df_p.apply(lambda r: r.astype(str).str.contains(search_p, case=False).any(), axis=1)]
         for i, row in df_p.iterrows():
@@ -646,26 +702,53 @@ elif st.session_state.page == "📦 INVENTORY":
                     st.session_state.selected_id = row.get('TicketID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
     else: st.info("Tiada barang.")
 
+# === PAGE: HISTORY DEVICE (V65) ===
+elif st.session_state.page == "🔎 HISTORY DEVICE":
+    st.title("🔎 Semakan Sejarah Peranti (SN)")
+    st.info("Masukkan Serial Number (S/N) untuk melihat rekod servis lama.")
+    
+    search_sn = st.text_input("Scan / Taip Serial Number:", placeholder="Contoh: SN12345678")
+    
+    if search_sn:
+        df = load_data("Tickets")
+        if not df.empty:
+            history = df[df['SN'].astype(str).str.strip().str.upper() == search_sn.strip().upper()]
+            
+            if not history.empty:
+                st.success(f"Jumpa {len(history)} rekod untuk S/N: {search_sn}")
+                st.dataframe(history[['Tarikh', 'ID', 'Model', 'Masalah', 'Status', 'Tech_Note']], use_container_width=True)
+                
+                st.write("---")
+                st.write("### 📜 Butiran Terperinci")
+                for _, row in history.iterrows():
+                    with st.expander(f"{row['Tarikh']} - {row['Masalah']} ({row['Status']})"):
+                        st.write(f"**ID Tiket:** {row['ID']}")
+                        st.write(f"**Technician Note:** {row['Tech_Note']}")
+                        if st.button("Buka Job Ini", key=f"hist_{row['ID']}"):
+                            st.session_state.selected_id = row['ID']
+                            st.session_state.page = "🔧 UPDATE STATUS"
+                            st.rerun()
+            else:
+                st.warning("Tiada rekod dijumpai untuk S/N ini.")
+        else:
+            st.error("Database kosong.")
+
 # === PAGE: LAPORAN ===
 elif st.session_state.page == "📈 LAPORAN":
     st.title("📈 Laporan Prestasi")
     df = load_data("Tickets"); df_s = load_data("Sales"); df_p = load_data("Parts")
-    
     if not df.empty:
         df['Tarikh'] = pd.to_datetime(df['Tarikh'], errors='coerce')
         df['Harga_Jual'] = df['Harga_Jual'].apply(safe_float)
         df['Kos_Part'] = df['Kos_Part'].apply(safe_float)
         df['Untung'] = df['Harga_Jual'] - df['Kos_Part']
-        
         serv_sales = df['Harga_Jual'].sum()
         shop_sales = df_s['Total'].apply(safe_float).sum() if not df_s.empty else 0
         total_rev = serv_sales + shop_sales
-        
         m1, m2, m3 = st.columns(3)
         m1.metric("Total Revenue", f"RM {total_rev:.2f}")
         m2.metric("Untung Servis", f"RM {df['Untung'].sum():.2f}")
         m3.metric("Jualan Kedai", f"RM {shop_sales:.2f}")
-        
         st.divider()
         c1, c2 = st.columns(2)
         with c1:
@@ -676,15 +759,12 @@ elif st.session_state.page == "📈 LAPORAN":
         with c2:
             st.subheader("🔩 Barang Laju (Parts)")
             if not df_p.empty: st.bar_chart(df_p['NamaPart'].value_counts().head(5))
-            
         st.divider()
         st.subheader("📅 Prestasi Berkala")
         tab_h, tab_m, tab_b = st.tabs(["Harian", "Mingguan", "Bulanan"])
-        
         with tab_h: st.line_chart(df.groupby(df['Tarikh'].dt.date)[['Harga_Jual', 'Untung']].sum().tail(30))
         with tab_m: st.bar_chart(df.groupby(df['Tarikh'].dt.to_period('W').astype(str))[['Harga_Jual', 'Untung']].sum())
         with tab_b: st.bar_chart(df.groupby(df['Tarikh'].dt.to_period('M').astype(str))[['Harga_Jual', 'Untung']].sum())
-        
         st.download_button("📥 Download Laporan (CSV)", df.to_csv(index=False).encode('utf-8'), "Laporan.csv", "text/csv")
 
 # === PAGE: TETAPAN ===
