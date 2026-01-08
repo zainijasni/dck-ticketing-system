@@ -33,7 +33,7 @@ if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 if 'email_user' not in st.session_state: st.session_state.email_user = ""
 if 'email_pass' not in st.session_state: st.session_state.email_pass = ""
-if 'pos_cart' not in st.session_state: st.session_state.pos_cart = [] # BAKUL JUALAN BARU
+if 'pos_cart' not in st.session_state: st.session_state.pos_cart = [] # BAKUL JUALAN
 if 'config' not in st.session_state:
     st.session_state.config = {
         "Company_Name": "DCK TECH SERVICES",
@@ -81,21 +81,25 @@ def init_db():
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
+        # Tickets
         try: ws = sh.worksheet("Tickets")
         except: ws = sh.add_worksheet("Tickets", 1000, 20)
         h_t = ["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
         if len(ws.row_values(1)) != len(h_t): ws.update("A1:P1", [h_t])
         
+        # Parts
         try: ws_p = sh.worksheet("Parts")
         except: ws_p = sh.add_worksheet("Parts", 1000, 10)
         h_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
         if ws_p.row_values(1) != h_p: ws_p.update("A1:H1", [h_p])
         
+        # Sales
         try: ws_s = sh.worksheet("Sales")
         except: ws_s = sh.add_worksheet("Sales", 1000, 10)
         h_s = ["ID", "Tarikh", "Item", "Qty", "Harga_Unit", "Total", "Customer", "PaymentMethod"]
         if ws_s.row_values(1) != h_s: ws_s.update("A1:H1", [h_s])
         
+        # Config
         try: ws_c = sh.worksheet("Config")
         except: 
             ws_c = sh.add_worksheet("Config", 100, 2)
@@ -176,7 +180,7 @@ def delete_part(part_id):
     if cell: robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
     return False
 
-# --- 4. PDF GENERATOR (UPDATED FOR MULTI-ITEM) ---
+# --- 4. PDF GENERATOR ---
 def draw_wrapped_text(c, text, x, y, max_width, font="Helvetica", size=10):
     c.setFont(font, size)
     text = str(text)
@@ -269,16 +273,15 @@ def generate_pdf(t, type="SERVICE"):
         y -= 25
         p.setFont("Helvetica", 10)
         
-        # Check if list or single item (Backward Compatibility)
         items = t.get('Items_List', [])
-        if not items: # Fallback for single item
+        if not items:
             items = [{'Item': t.get('Item'), 'Qty': t.get('Qty'), 'Harga_Unit': t.get('Harga_Unit')}]
             
         for itm in items:
             p.drawString(350, y, str(itm.get('Qty', 1)))
             p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
             y_item = draw_wrapped_text(p, str(itm.get('Item', '-')), 50, y, 280)
-            y = y_item - 10 # Spacing between items
+            y = y_item - 10
             
         p.line(40, y, w-40, y)
 
@@ -440,13 +443,13 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m, icon='✅')
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI (MULTI-ITEM CART SYSTEM) ===
+# === PAGE: JUALAN KEDAI (V63.1 - BAKUL & DELETE) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     tab_pos, tab_manage = st.tabs(["🛒 Kaunter Bayaran", "📋 Rekod Jualan"])
     
     with tab_pos:
-        # 1. ADD ITEM TO CART
+        # 1. ADD ITEM
         with st.container(border=True):
             st.subheader("➕ Tambah Barang")
             with st.form("add_item_form", clear_on_submit=True):
@@ -454,19 +457,28 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                 item = c1.text_input("Nama Barang")
                 qty = c2.number_input("Qty", 1, 100, 1)
                 price = c3.number_input("Harga Unit (RM)", 0.0)
-                add_btn = st.form_submit_button("Masuk Bakul")
-                
-                if add_btn and item and price > 0:
+                if st.form_submit_button("Masuk Bakul") and item and price > 0:
                     st.session_state.pos_cart.append({"Item": item, "Qty": qty, "Harga_Unit": price, "Total": qty * price})
                     st.toast(f"{item} ditambah!", icon='🛒')
         
-        # 2. SHOW CART & CHECKOUT
+        # 2. CART
         if st.session_state.pos_cart:
             st.divider()
             st.subheader("🛍️ Bakul Jualan")
             cart_df = pd.DataFrame(st.session_state.pos_cart)
             st.dataframe(cart_df, use_container_width=True)
             
+            # --- FITUR BUANG ITEM ---
+            with st.expander("🗑️ Buang Item Dari Bakul"):
+                opts = [f"{i}. {x['Item']} (x{x['Qty']})" for i, x in enumerate(st.session_state.pos_cart)]
+                sel_del = st.selectbox("Pilih Item:", opts)
+                if st.button("Hapus Item Terpilih"):
+                    idx = int(sel_del.split(".")[0])
+                    removed = st.session_state.pos_cart.pop(idx)
+                    st.toast(f"{removed['Item']} dibuang!", icon='🗑️')
+                    st.rerun()
+            # ------------------------
+
             grand_total = cart_df['Total'].sum()
             st.metric("GRAND TOTAL", f"RM {grand_total:.2f}")
             
@@ -476,29 +488,21 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                 pay_method = c2.selectbox("Cara Bayaran", ["Cash", "QR DuitNow", "Online Transfer"])
                 
                 if st.form_submit_button("✅ Bayar & Cetak Resit", use_container_width=True):
-                    # Save to DB
                     sid = f"SALE-{datetime.now().strftime('%d%H%M')}"
                     tgl = datetime.now().strftime("%Y-%m-%d")
-                    
                     for row in st.session_state.pos_cart:
                         add_row("Sales", [sid, tgl, row['Item'], row['Qty'], row['Harga_Unit'], row['Total'], cust_name, pay_method])
                     
-                    # Prepare Data for Receipt
-                    st.session_state.last_sale = {
-                        "ID": sid, "Tarikh": tgl, "Customer": cust_name, 
-                        "Total": grand_total, "Items_List": st.session_state.pos_cart
-                    }
-                    
-                    # Clear Cart
+                    st.session_state.last_sale = {"ID": sid, "Tarikh": tgl, "Customer": cust_name, "Total": grand_total, "Items_List": st.session_state.pos_cart}
                     st.session_state.pos_cart = []
                     st.toast("Transaksi Berjaya!", icon='💰')
                     time.sleep(1); st.rerun()
             
-            if st.button("❌ Kosongkan Bakul"):
+            if st.button("❌ Kosongkan Semua Bakul"):
                 st.session_state.pos_cart = []
                 st.rerun()
 
-        # 3. PRINT RECEIPT (LAST TRANSACTION)
+        # 3. RECEIPT
         if 'last_sale' in st.session_state and st.session_state.last_sale:
             st.divider()
             st.success("Transaksi Selesai.")
@@ -508,13 +512,11 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
         df_s = load_data("Sales")
         if not df_s.empty:
             st.dataframe(df_s)
-            sale_id = st.selectbox("Pilih ID Transaksi:", ["-"] + df_s['ID'].unique().tolist()) # Unique ID only
+            sale_id = st.selectbox("Pilih ID Transaksi:", ["-"] + df_s['ID'].unique().tolist())
             if sale_id != "-":
-                st.info(f"Menguruskan Transaksi: {sale_id}")
-                if st.button("🗑️ Hapus Seluruh Transaksi"):
-                    delete_row_data("Sales", sale_id)
-                    st.toast("Transaksi Dihapus!", icon='🗑️')
-                    time.sleep(1); st.rerun()
+                st.info(f"Menguruskan: {sale_id}")
+                if st.button("🗑️ Hapus Transaksi"):
+                    delete_row_data("Sales", sale_id); st.toast("Dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
 
 # === PAGE: UPDATE STATUS ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
@@ -685,30 +687,17 @@ elif st.session_state.page == "📈 LAPORAN":
 
 # === PAGE: TETAPAN ===
 elif st.session_state.page == "⚙️ TETAPAN":
-    st.title("⚙️ Tetapan & Branding")
-    
-    with st.expander("🏢 Maklumat Syarikat & Logo", expanded=True):
-        with st.form("conf"):
-            cn = st.text_input("Nama Syarikat", st.session_state.config.get("Company_Name"))
-            ad = st.text_area("Alamat", st.session_state.config.get("Address"))
-            ph = st.text_input("No Tel", st.session_state.config.get("Phone"))
-            logo_file = st.file_uploader("Upload Logo Kedai (Image Only)", type=['png', 'jpg', 'jpeg'])
-            tnc1 = st.text_area("T&C Tiket", st.session_state.config.get("TNC_Ticket"))
-            tnc2 = st.text_area("T&C Invois", st.session_state.config.get("TNC_Invoice"))
-            
-            if st.form_submit_button("💾 Simpan Tetapan"):
-                new_c = st.session_state.config.copy()
-                if logo_file:
-                    with st.spinner("Uploading Logo..."):
-                        up_res = cloudinary.uploader.upload(logo_file)
-                        new_c['Logo'] = up_res['secure_url']
-                        st.toast("Logo Berjaya Diupload!", icon='🖼️')
-                new_c.update({"Company_Name":cn, "Address":ad, "Phone":ph, "TNC_Ticket":tnc1, "TNC_Invoice":tnc2})
-                save_config_to_db(new_c)
-                st.toast("Tetapan Disimpan!", icon='✅'); time.sleep(1); st.rerun()
-                
-        if st.session_state.config.get("Logo"):
-            st.write("Current Logo:"); st.image(st.session_state.config.get("Logo"), width=150)
+    st.title("⚙️ Tetapan")
+    with st.form("conf"):
+        cn = st.text_input("Nama Syarikat", st.session_state.config.get("Company_Name"))
+        ad = st.text_area("Alamat", st.session_state.config.get("Address"))
+        ph = st.text_input("No Tel", st.session_state.config.get("Phone"))
+        tnc1 = st.text_area("T&C Tiket", st.session_state.config.get("TNC_Ticket"))
+        tnc2 = st.text_area("T&C Invois", st.session_state.config.get("TNC_Invoice"))
+        if st.form_submit_button("Simpan"):
+            new_c = st.session_state.config.copy()
+            new_c.update({"Company_Name":cn, "Address":ad, "Phone":ph, "TNC_Ticket":tnc1, "TNC_Invoice":tnc2})
+            save_config_to_db(new_c); st.toast("Tetapan Disimpan!", icon='✅')
     
     with st.expander("📧 Email Server"):
         with st.form("em"):
