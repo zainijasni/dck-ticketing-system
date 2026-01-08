@@ -4,7 +4,7 @@ from datetime import datetime
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader  # Penting untuk Logo
+from reportlab.lib.utils import ImageReader
 import gspread
 from google.oauth2.service_account import Credentials
 import cloudinary
@@ -38,7 +38,7 @@ if 'config' not in st.session_state:
         "Company_Name": "DCK TECH SERVICES",
         "Address": "No 123, Jalan Gadget, 70000 Seremban",
         "Phone": "012-3456789",
-        "Logo": "", # Link Logo
+        "Logo": "",
         "TNC_Ticket": "1. Data customer tanggungjawab sendiri.\n2. Warranty part sahaja.",
         "TNC_Invoice": "1. Barang dijual tiada refund."
     }
@@ -175,77 +175,95 @@ def delete_part(part_id):
     if cell: robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
     return False
 
-# --- 4. PDF GENERATOR (COSMETIC UPGRADE) ---
+# --- 4. PDF GENERATOR (WITH TEXT WRAP FIX) ---
+def draw_wrapped_text(c, text, x, y, max_width, font="Helvetica", size=10):
+    """Fungsi ajaib untuk turunkan tulisan ke bawah kalau panjang"""
+    c.setFont(font, size)
+    text = str(text)
+    words = text.split()
+    lines = []
+    current_line = []
+    
+    for word in words:
+        # Cuba tambah perkataan, check panjang
+        test_line = ' '.join(current_line + [word])
+        if c.stringWidth(test_line, font, size) < max_width:
+            current_line.append(word)
+        else:
+            lines.append(' '.join(current_line))
+            current_line = [word]
+    lines.append(' '.join(current_line))
+    
+    # Lukis setiap baris
+    curr_y = y
+    for line in lines:
+        c.drawString(x, curr_y, line)
+        curr_y -= (size + 2) # Jarak antara baris
+    
+    return curr_y # Return posisi Y baru
+
 def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
     cfg = st.session_state.config
     
-    # 1. LOGO & HEADER
-    # Cuba tarik logo dari config
+    # 1. HEADER & LOGO
     logo_url = cfg.get("Logo", "")
     if logo_url and len(logo_url) > 10:
         try:
             logo = ImageReader(logo_url)
             p.drawImage(logo, 40, h-100, width=80, height=80, mask='auto', preserveAspectRatio=True)
-        except: pass # Kalau fail, takpa, proceed text
+        except: pass
 
-    # Company Text (Align Right or Next to Logo)
     p.setFont("Helvetica-Bold", 20)
     p.drawString(140, h-50, cfg.get("Company_Name", "DCK TECH SERVICES"))
     p.setFont("Helvetica", 10)
     p.drawString(140, h-65, cfg.get("Address", "Alamat Kedai"))
     p.drawString(140, h-78, f"Tel: {cfg.get('Phone', '')}")
     
-    # Header Line
     p.setLineWidth(1.5)
     p.line(40, h-110, w-40, h-110)
     
-    # 2. DOCUMENT TITLE
+    # 2. TITLE & INFO
     p.setFont("Helvetica-Bold", 14)
     doc_title = "SERVICE TICKET" if type == "SERVICE" else "OFFICIAL RECEIPT"
     if type == "INVOICE": doc_title = "OFFICIAL INVOICE"
     p.drawCentredString(w/2, h-130, doc_title)
     
-    # 3. INFO BOX (Customer & Date)
     p.setLineWidth(0.5)
-    p.rect(40, h-220, w-80, 80) # Kotak Utama Info
-    
-    p.setFont("Helvetica-Bold", 10)
-    p.drawString(50, h-155, "CUSTOMER DETAILS:")
+    p.rect(40, h-220, w-80, 80)
+    p.setFont("Helvetica-Bold", 10); p.drawString(50, h-155, "CUSTOMER DETAILS:")
     p.setFont("Helvetica", 10)
     
-    if 'Model' in t: # Service Ticket Data
-        # Left Side
-        p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}")
-        p.drawString(50, h-190, f"Phone: {t.get('Phone', '-')}")
-        p.drawString(50, h-205, f"Email: {t.get('Email', '-')}")
-        
-        # Right Side
-        p.drawString(300, h-175, f"Ticket ID: {t.get('ID', '-')}")
-        p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
-        p.drawString(300, h-205, f"S/N: {t.get('SN', '-')}")
-    else: # Sales Receipt Data
-        p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}")
-        p.drawString(300, h-175, f"Receipt ID: {t.get('ID', '-')}")
+    if 'Model' in t: # Service
+        p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}"); p.drawString(300, h-175, f"Ticket ID: {t.get('ID', '-')}")
+        p.drawString(50, h-190, f"Phone: {t.get('Phone', '-')}"); p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
+        p.drawString(50, h-205, f"Email: {t.get('Email', '-')}"); p.drawString(300, h-205, f"S/N: {t.get('SN', '-')}")
+    else: # Sales
+        p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}"); p.drawString(300, h-175, f"Receipt ID: {t.get('ID', '-')}")
         p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
 
-    # 4. CONTENT TABLE
+    # 3. CONTENT TABLE (WITH WRAPPING FIX)
     y = h-250
     p.setFont("Helvetica-Bold", 11)
-    p.setFillColorRGB(0.9, 0.9, 0.9) # Background kelabu sikit utk header
+    p.setFillColorRGB(0.9, 0.9, 0.9)
     p.rect(40, y, w-80, 20, fill=1)
-    p.setFillColorRGB(0, 0, 0) # Hitam balik
+    p.setFillColorRGB(0, 0, 0)
     
     if 'Model' in t:
         p.drawString(50, y+6, "DEVICE / MODEL"); p.drawString(250, y+6, "DIAGNOSIS / PROBLEM"); p.drawString(450, y+6, "REMARKS")
         y -= 25
-        p.setFont("Helvetica", 10)
-        p.drawString(50, y, f"{t.get('Model', '-')}"); p.drawString(250, y, f"{t.get('Masalah', '-')}"); p.drawString(450, y, f"{t.get('Tech_Note', '-')}")
         
-        y -= 20
-        p.line(40, y, w-40, y) # Garis bawah item
+        # GUNA WRAPPING FUNCTION DI SINI
+        y_model = draw_wrapped_text(p, t.get('Model', '-'), 50, y, 180)
+        y_prob = draw_wrapped_text(p, t.get('Masalah', '-'), 250, y, 180)
+        y_note = draw_wrapped_text(p, t.get('Tech_Note', '-'), 450, y, 100)
+        
+        # Cari Y paling rendah untuk baris seterusnya
+        y = min(y_model, y_prob, y_note) - 15
+        p.line(40, y, w-40, y)
+        
         y -= 20
         p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "Condition & Accessories:")
         p.setFont("Helvetica", 10); p.drawString(200, y, f"{t.get('Fizikal', '-')} | {t.get('Aksesori', '-')}")
@@ -254,31 +272,33 @@ def generate_pdf(t, type="SERVICE"):
         p.drawString(50, y+6, "ITEM DESCRIPTION"); p.drawString(350, y+6, "QTY"); p.drawString(450, y+6, "PRICE")
         y -= 25
         p.setFont("Helvetica", 10)
-        p.drawString(50, y, str(t.get('Item', '-'))); p.drawString(350, y, str(t.get('Qty', '-'))); p.drawString(450, y, f"RM {safe_float(t.get('Harga_Unit', 0)):.2f}")
-        y -= 20
+        # Sales item biasanya pendek, tapi kita wrap juga just in case
+        y_item = draw_wrapped_text(p, str(t.get('Item', '-')), 50, y, 280)
+        p.drawString(350, y, str(t.get('Qty', '-')))
+        p.drawString(450, y, f"RM {safe_float(t.get('Harga_Unit', 0)):.2f}")
+        
+        y = y_item - 15
         p.line(40, y, w-40, y)
 
-    # 5. TOTAL (If Invoice/Receipt)
+    # 4. TOTAL & FOOTER
     if type in ["INVOICE", "SALES"] or t.get('Status') in ['Done', 'Collected']:
         total = safe_float(t.get('Harga_Jual', t.get('Total', 0)))
         y -= 30
         p.setFont("Helvetica-Bold", 14)
         p.drawRightString(w-50, y, f"TOTAL: RM {total:.2f}")
     
-    # 6. TERMS & FOOTER
+    # Terms
     y_footer = 150
     p.line(40, y_footer, w-40, y_footer)
     p.setFont("Helvetica-Bold", 9); p.drawString(40, y_footer-15, "TERMS & CONDITIONS:")
     p.setFont("Helvetica", 8)
     
     tnc_text = cfg.get("TNC_Invoice", "") if type in ["INVOICE", "SALES"] else cfg.get("TNC_Ticket", "")
-    row_gap = 10
-    current_y = y_footer - 30
+    curr_y = y_footer - 30
     for line in tnc_text.split('\n'):
-        p.drawString(40, current_y, line.strip())
-        current_y -= row_gap
+        p.drawString(40, curr_y, line.strip())
+        curr_y -= 12
         
-    # Signatures
     y_sig = 50
     p.line(50, y_sig, 200, y_sig); p.line(350, y_sig, 500, y_sig)
     p.drawString(50, y_sig-15, "Customer Signature"); p.drawString(350, y_sig-15, "Technician / Manager")
@@ -632,40 +652,29 @@ elif st.session_state.page == "📈 LAPORAN":
 elif st.session_state.page == "⚙️ TETAPAN":
     st.title("⚙️ Tetapan & Branding")
     
-    # 1. Branding (Logo & T&C)
     with st.expander("🏢 Maklumat Syarikat & Logo", expanded=True):
         with st.form("conf"):
             cn = st.text_input("Nama Syarikat", st.session_state.config.get("Company_Name"))
             ad = st.text_area("Alamat", st.session_state.config.get("Address"))
             ph = st.text_input("No Tel", st.session_state.config.get("Phone"))
-            
-            # LOGO UPLOAD (NEW FEATURE)
             logo_file = st.file_uploader("Upload Logo Kedai (Image Only)", type=['png', 'jpg', 'jpeg'])
-            
             tnc1 = st.text_area("T&C Tiket", st.session_state.config.get("TNC_Ticket"))
             tnc2 = st.text_area("T&C Invois", st.session_state.config.get("TNC_Invoice"))
             
             if st.form_submit_button("💾 Simpan Tetapan"):
                 new_c = st.session_state.config.copy()
-                
-                # Handle Logo Upload
                 if logo_file:
                     with st.spinner("Uploading Logo..."):
                         up_res = cloudinary.uploader.upload(logo_file)
                         new_c['Logo'] = up_res['secure_url']
                         st.toast("Logo Berjaya Diupload!", icon='🖼️')
-                
                 new_c.update({"Company_Name":cn, "Address":ad, "Phone":ph, "TNC_Ticket":tnc1, "TNC_Invoice":tnc2})
                 save_config_to_db(new_c)
-                st.toast("Tetapan Disimpan!", icon='✅')
-                time.sleep(1); st.rerun()
+                st.toast("Tetapan Disimpan!", icon='✅'); time.sleep(1); st.rerun()
                 
-        # Preview Logo
         if st.session_state.config.get("Logo"):
-            st.write("Current Logo:")
-            st.image(st.session_state.config.get("Logo"), width=150)
+            st.write("Current Logo:"); st.image(st.session_state.config.get("Logo"), width=150)
     
-    # 2. Email Server
     with st.expander("📧 Email Server"):
         with st.form("em"):
             eu = st.text_input("Email", st.session_state.email_user)
