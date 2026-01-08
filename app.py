@@ -193,6 +193,7 @@ def init_db():
         st.session_state.db_ready = True
 
     except Exception as e:
+        # Jika masih error, kita biarkan dulu supaya app tak crash
         pass
 
 # Panggil Init Sekali Sahaja di sini
@@ -200,13 +201,15 @@ init_db()
 
 # --- DATA LOADING (V80: Optimized Cache) ---
 def load_data(tab_name):
+    # No Cache here to solve sync issues and ensure live data
+    init_db()
     client = get_client()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
-        # Patch Empty DataFrame
+        # Patch Empty
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -221,13 +224,11 @@ def load_data(tab_name):
             elif tab_name == "Ref_Data":
                  df = pd.DataFrame(columns=["Type", "Value"])
 
-        # Patch Missing Columns if any
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
-            
         return df
     except:
-        return pd.DataFrame() # Return empty DF if fail
+        return pd.DataFrame()
 
 def load_config():
     try:
@@ -990,8 +991,9 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     img_qr.save(buffer, format="PNG")
                     st.image(buffer.getvalue(), caption=f"S/N: {job.get('SN')}", use_container_width=True)
                     
-                    # V83: SHOW LINK TEXT
-                    st.text_input("URL Link (Copy)", value=qr_data, read_only=True)
+                    # V84 FIX: Guna st.code supaya boleh copy tanpa error
+                    st.write("**URL Link (Copy):**")
+                    st.code(qr_data, language=None)
                     st.caption("👉 Right-click gambar QR > 'Save Image' untuk print.")
 
 # === PAGE: PENGURUSAN STOK (V83: ADDED MANUAL ADJUSTMENT) ===
