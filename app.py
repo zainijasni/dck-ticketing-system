@@ -47,67 +47,46 @@ def robust_api_call(func, *args, **kwargs):
             continue
     return None
 
-# --- LOGIK BARU: AUTO-FIX NOMBOR TELEFON ---
 def clean_phone_number_my(phone_input):
-    """
-    Tukar apa jenis format jadi format WhatsApp Malaysia (601xxxxxxxx)
-    Contoh: 012-345 -> 6012345
-    """
-    # 1. Buang sengkang, jarak, simbol tambah
     p = str(phone_input).replace("-", "").replace(" ", "").replace("+", "").strip()
-    
-    # 2. Logic Tambah 6
-    if p.startswith("0"):
-        return "6" + p  # 012 -> 6012
-    elif p.startswith("1"):
-        return "60" + p # 12 -> 6012 (kot tertekan)
-    elif p.startswith("60"):
-        return p        # Dah betul
-    else:
-        return "6" + p  # Fallback
+    if p.startswith("0"): return "6" + p
+    elif p.startswith("1"): return "60" + p
+    elif p.startswith("60"): return p
+    else: return "6" + p
 
-# --- TEMPLATE AYAT (WHATSAPP & EMAIL) ---
+# --- 3. TEMPLATE AYAT (WHATSAPP & EMAIL) ---
 def generate_links(type, phone, email, nama, tid, model, status, images, note=""):
     
-    # Bersihkan Nombor Dulu
     valid_phone = clean_phone_number_my(phone)
     
-    # AYAT 1: MASA DAFTAR (PENDING)
+    # --- TEMPLATE AYAT (BOSS REQUEST) ---
     if status == "Pending":
-        subject = f"Penerimaan Peranti: {tid} - {model}"
-        header = f"Hai {nama},\n\nTerima kasih kerana memilih DCK TECH. Kami telah menerima peranti anda untuk pemeriksaan."
-        details = f"📋 *Butiran Tiket:*\nID Tiket: {tid}\nModel: {model}\nMasalah: {note}\n\n📷 *Gambar Peranti:*\n{images}"
-        footer = "\nKami akan menghubungi anda semula selepas diagnosis awal dibuat.\n\nSekian,\n*DCK Tech Team*"
+        subject = f"Penerimaan Peranti - Tiket: {tid}"
+        header = f"Hai {nama},\n\nKami telah menerima {model} anda untuk pemeriksaan lanjut."
+        body = f"Berikut adalah butiran tiket anda:\n\n🏷️ ID Tiket: {tid}\n💻 Model: {model}\n⚠️ Masalah: {note}\n\n📷 Gambar Peranti Anda:\n{images}\n\nKami akan mengemaskini status selepas diagnosis dibuat.\n\nTerima Kasih,\nDCK Tech Team"
     
-    # AYAT 2: MASA SIAP (DONE/COLLECTED)
     elif status in ["Done", "Collected"]:
-        subject = f"SIAP: Peranti {model} (Tiket: {tid})"
-        header = f"Hai {nama},\n\nBerita baik! Peranti anda telah SIAP dibaiki dan sedia untuk diambil."
-        details = f"📋 *Butiran:* {model}\nID Tiket: {tid}\nStatus: {status}\n\nSila rujuk resit/invoice untuk bayaran."
-        footer = "\nTerima kasih kerana berurusan dengan kami!\n\n*DCK Tech Team*"
+        subject = f"SIAP: {model} - Tiket: {tid}"
+        header = f"Hai {nama},\n\nBerita baik! Peranti anda ({model}) telah SIAP dibaiki."
+        body = f"🏷️ ID Tiket: {tid}\n✅ Status: {status}\n\nSila rujuk invois rasmi untuk jumlah bayaran.\n\nTerima Kasih kerana memilih DCK Tech!\nDCK Tech Team"
         
-    # AYAT 3: UPDATE BIASA
-    else:
-        subject = f"Update Status: {tid} - {model}"
-        header = f"Hai {nama},\n\nIni adalah update terkini untuk peranti anda."
-        details = f"Status Terkini: {status}\nModel: {model}"
-        footer = "\nKami sedang berusaha menyelesaikannya secepat mungkin.\n\n*DCK Tech Team*"
+    else: # Checking, Waiting Part, etc
+        subject = f"Update Status: {tid}"
+        header = f"Hai {nama},\n\nIni adalah status terkini untuk peranti anda."
+        body = f"🏷️ ID Tiket: {tid}\n⚙️ Status Semasa: {status}\n💻 Model: {model}\n\nKami sedang berusaha menyelesaikannya.\n\nTerima Kasih,\nDCK Tech Team"
 
-    # GABUNGAN MESEJ
-    full_msg = f"{header}\n\n{details}\n{footer}"
-    
+    full_msg = f"{header}\n\n{body}"
+
     if type == "WA":
-        # Encoding untuk URL WhatsApp
-        encoded_msg = urllib.parse.quote(full_msg)
-        return f"https://wa.me/{valid_phone}?text={encoded_msg}"
+        return f"https://wa.me/{valid_phone}?text={urllib.parse.quote(full_msg)}"
     
     elif type == "EMAIL":
-        # Encoding untuk Mailto
-        safe_subject = urllib.parse.quote(subject)
+        # Encoding khas untuk email body
+        safe_sub = urllib.parse.quote(subject)
         safe_body = urllib.parse.quote(full_msg)
-        return f"mailto:{email}?subject={safe_subject}&body={safe_body}"
+        return f"mailto:{email}?subject={safe_sub}&body={safe_body}"
 
-# --- 3. DATABASE ENGINE ---
+# --- 4. DATABASE ENGINE ---
 @st.cache_resource
 def get_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -189,7 +168,7 @@ def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
         return True
     return False
 
-# --- 4. PDF GENERATOR ---
+# --- 5. PDF GENERATOR ---
 def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
@@ -231,7 +210,7 @@ def generate_pdf(t, type="SERVICE"):
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 5. NAVIGATION ---
+# --- 6. NAVIGATION ---
 PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN"]
 try: current_index = PAGES.index(st.session_state.page)
 except: current_index = 0
@@ -306,16 +285,21 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         ld = st.session_state.last_data
         st.divider()
         st.success(f"Tiket {ld['ID']} Telah Dibuka!")
+        
         col_pdf, col_wa, col_email = st.columns(3)
         with col_pdf: st.download_button("📥 1. Download Tiket", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
+        
+        # --- BUTANG WHATSAPP ---
         with col_wa: 
-            # LINK AUTO FIX PHONE & TEMPLATE
             wa_url = generate_links("WA", ld['Phone'], ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'], ld['Tech_Note'])
             st.link_button("📱 2. WhatsApp Customer", wa_url, use_container_width=True)
+            
+        # --- BUTANG EMAIL (NO BLANK TAB FIX) ---
         with col_email: 
             if ld['Email']: 
                 em_url = generate_links("EMAIL", ld['Phone'], ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'], ld['Tech_Note'])
-                st.link_button("📧 3. Email Customer", em_url, use_container_width=True)
+                # Guna HTML biasa utk Email supaya tak buka tab baru
+                st.markdown(f'<a href="{em_url}" style="text-decoration:none;"><button style="width:100%; border:1px solid #ff4b4b; background:white; color:#ff4b4b; padding:8px; border-radius:5px; cursor:pointer;">📧 3. Hantar Email</button></a>', unsafe_allow_html=True)
 
 # === PAGE: UPDATE STATUS ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
@@ -328,10 +312,11 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        with st.expander("ℹ️ MAKLUMAT PENUH TIKET & KOMUNIKASI", expanded=True):
-            edit_mode = st.checkbox("✏️ Tick Untuk Edit Maklumat Pelanggan")
+        # --- BOX MAKLUMAT & KOMUNIKASI ---
+        with st.expander("ℹ️ MAKLUMAT TIKET & KOMUNIKASI (KLIK EDIT)", expanded=True):
+            edit_mode = st.checkbox("✏️ Tick Untuk Edit Info")
             if edit_mode:
-                st.warning("Anda sedang dalam Mode Edit. Sila berhati-hati.")
+                st.warning("Editing Mode...")
                 with st.form("edit_cust_form"):
                     ec_nama = st.text_input("Nama", value=job.get('Customer',''))
                     c_ec1, c_ec2 = st.columns(2)
@@ -353,13 +338,16 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
             st.divider()
             ca, cb = st.columns(2)
-            # GENERATE SMART LINK DISINI
+            
+            # LINK GENERATOR DI SINI
             wa_url = generate_links("WA", job.get('Phone',''), job.get('Email',''), job.get('Customer',''), job.get('ID',''), job.get('Model',''), job.get('Status',''), job.get('Image_Link',''))
-            ca.link_button("📱 WhatsApp Status", wa_url)
+            ca.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
             
             if job.get('Email'): 
                 em_url = generate_links("EMAIL", job.get('Phone',''), job.get('Email',''), job.get('Customer',''), job.get('ID',''), job.get('Model',''), job.get('Status',''), job.get('Image_Link',''))
-                cb.link_button("📧 Email Status", em_url)
+                # BUTANG EMAIL FIX (HTML)
+                with cb:
+                    st.markdown(f'<a href="{em_url}" style="text-decoration:none;"><button style="width:100%; border:1px solid #ff4b4b; background:white; color:#ff4b4b; padding:8px; border-radius:5px; cursor:pointer;">📧 Hantar Email Status</button></a>', unsafe_allow_html=True)
         
         c_left, c_right = st.columns([1, 2])
         
