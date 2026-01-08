@@ -89,7 +89,7 @@ def robust_api_call(func, *args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception:
-            time.sleep(1)
+            time.sleep(2) # V79: Tambah masa rehat 2 saat kalau error
             continue
     return None
 
@@ -113,9 +113,12 @@ def get_client():
     creds = Credentials.from_service_account_info(st.secrets["google_creds"], scopes=scope)
     return gspread.authorize(creds)
 
-def init_db():
-    """Pastikan semua Tab wujud dengan Header yang betul"""
-    if 'db_checked' in st.session_state:
+def init_db(force_check=False):
+    """
+    V79 Update: force_check parameter untuk paksa semak database
+    walaupun session state kata dah semak.
+    """
+    if 'db_checked' in st.session_state and not force_check:
         return
     try:
         client = get_client()
@@ -175,19 +178,23 @@ def init_db():
             ws_r.update("A1:H1", [h_r])
 
         st.session_state.db_checked = True
-    except:
+    except Exception as e:
+        # Jangan stop app kalau init fail, cuma print error di logs
+        print(f"Init DB Error: {e}")
         pass
 
 def load_data(tab_name):
-    # PENTING: Tiada caching di sini supaya data sentiasa fresh
-    init_db()
+    # V79: Panggil init_db() setiap kali load data untuk pastikan tab wujud
+    # selepas Boss delete manual.
+    init_db(force_check=True)
+    
     client = get_client()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
-        # Kalau DataFrame kosong, kita paksa letak Header
+        # Patch Empty
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -200,10 +207,8 @@ def load_data(tab_name):
             elif tab_name == "Restock_Log":
                  df = pd.DataFrame(columns=["LogID", "Date", "InvoiceNo", "Supplier", "ItemName", "QtyAdded", "CostPrice", "TotalCost"])
 
-        # Patch column email jika tiada (untuk backward compatibility)
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
-            
         return df
     except:
         return pd.DataFrame()
@@ -228,9 +233,16 @@ def save_config_to_db(new_config):
 
 def add_row(tab_name, row):
     client = get_client()
-    sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+    # V79 FIX: Error Handling kalau tab tak jumpa (sebab baru delete)
+    try:
+        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+    except:
+        # Kalau error (contoh: WorksheetNotFound), kita run init_db sekali lagi
+        init_db(force_check=True)
+        time.sleep(2) # Rehat sekejap bagi masa create tab
+        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+        
     robust_api_call(sheet.append_row, row)
-    # Clear cache removed here since we removed global cache on load_data
 
 def update_cell_data(tab_name, id_val, col_dict):
     client = get_client()
@@ -255,8 +267,8 @@ def delete_row_data(tab_name, id_val):
 def update_stock(item_code, qty_change):
     # qty_change: Positif tambah, Negatif tolak
     client = get_client()
-    sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
+        sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
         cell = sheet.find(str(item_code))
         if cell:
             curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock
@@ -269,7 +281,14 @@ def update_stock(item_code, qty_change):
 
 def check_and_update_master(code, name, cost, sell, qty, supplier):
     client = get_client()
-    sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
+    # V79 FIX: Robust checking for Master_Inventory
+    try:
+        sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
+    except:
+        init_db(force_check=True)
+        time.sleep(2)
+        sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
+
     try:
         cell = sheet.find(str(code))
         if cell:
@@ -629,7 +648,6 @@ if st.session_state.page == "📊 DASHBOARD":
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     
-    # V69: Read options from Config (Dynamic Checkbox)
     opt_mslh = [x.strip() for x in st.session_state.config.get("Options_Masalah", "Slow, Screen, Battery").split(",")]
     opt_fiz = [x.strip() for x in st.session_state.config.get("Options_Fizikal", "Calar, Pecah").split(",")]
     opt_acc = [x.strip() for x in st.session_state.config.get("Options_Aksesori", "Bag, Charger").split(",")]
@@ -791,7 +809,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
     if not df_m.empty:
         for idx, row in df_m.iterrows():
             if safe_int(row['CurrentStock']) > 0:
-                # Format: ItemName (Stok: 5) - Cost: RM50
                 stock_options[f"{row['ItemName']} (Stok: {row['CurrentStock']}) - Cost: RM{row['CostPrice']}"] = row
 
     if not df.empty:
@@ -881,7 +898,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
         with c_r:
             df_p = load_data("Parts")
-            # Filter parts based on TicketID
+            # --- FIX: CHECK IF DATAFRAME HAS DATA & COLUMNS BEFORE FILTERING ---
             if not df_p.empty and 'TicketID' in df_p.columns:
                  parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             else:
@@ -937,8 +954,8 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 with st.form("use_part_form", clear_on_submit=True):
                     sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
                     
-                    # Warranty option for Part
-                    warr_part = st.radio("Warranty Part (Untuk Client)", [1, 3], horizontal=True, format_func=lambda x: f"{x} Bulan")
+                    # Warranty option for Part (Moved to Done Status logic above, but keep here if needed per part)
+                    # Simplified per request: Warranty is mainly on the Job receipt now.
                     
                     if st.form_submit_button("Guna Part Ini"):
                         if sel_part != "-":
@@ -946,11 +963,9 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             # Use .get to prevent KeyError if Supplier column is missing/empty
                             supplier = item_data.get('Supplier', 'Internal Stock')
                             
-                            exp = (datetime.now() + pd.DateOffset(months=int(warr_part))).strftime("%Y-%m-%d")
-                            
-                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), warr_part, exp, item_data['CostPrice']])
+                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "-", "-", item_data['CostPrice']])
                             update_stock(item_data['ItemCode'], -1)
-                            st.toast(f"{item_data['ItemName']} ditambah ke Job (Warranty {warr_part} Bulan)!", icon='✅')
+                            st.toast(f"{item_data['ItemName']} ditambah ke Job!", icon='✅')
                             time.sleep(1)
                             st.rerun()
                         else:
@@ -1021,9 +1036,10 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     progress_text = "Sedang menyimpan..."
                     my_bar = st.progress(0, text=progress_text)
                     
+                    # V79: Add sleep to prevent APIError
                     for i, item in enumerate(st.session_state.restock_cart):
-                        # Generate Code (Simple Hash based on name to keep consistent or Create New)
-                        # Check if exists in Master
+                        time.sleep(1.5) # Anti-jamming mechanism
+                        
                         found_code = None
                         if not df_m.empty:
                             match = df_m[df_m['ItemName'].str.lower() == item['ItemName'].lower()]
