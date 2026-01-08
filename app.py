@@ -68,12 +68,10 @@ def generate_links(type, phone, email, nama, tid, model, status, images, note=""
         subject = f"Penerimaan Peranti - Tiket: {tid}"
         header = f"Hai {nama},\n\nKami telah menerima {model} anda untuk pemeriksaan lanjut."
         body = f"Berikut adalah butiran tiket anda:\n\n🏷️ ID Tiket: {tid}\n💻 Model: {model}\n⚠️ Masalah: {note}\n\n📷 Gambar Peranti Anda:\n{images}\n\nKami akan mengemaskini status selepas diagnosis dibuat.\n\nTerima Kasih,\nDCK Tech Team"
-    
     elif status in ["Done", "Collected"]:
         subject = f"SIAP: {model} - Tiket: {tid}"
         header = f"Hai {nama},\n\nBerita baik! Peranti anda ({model}) telah SIAP dibaiki."
         body = f"🏷️ ID Tiket: {tid}\n✅ Status: {status}\n\nSila rujuk invois rasmi untuk jumlah bayaran.\n\nTerima Kasih kerana memilih DCK Tech!\nDCK Tech Team"
-        
     else:
         subject = f"Update Status: {tid}"
         header = f"Hai {nama},\n\nIni adalah status terkini untuk peranti anda."
@@ -175,20 +173,14 @@ def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
-    
     p.setFont("Helvetica-Bold", 22); p.drawString(50, h-50, "DCK TECH SERVICES")
     p.setFont("Helvetica", 10); p.drawString(50, h-65, "Resit & Borang Penerimaan Servis")
     p.line(50, h-75, w-50, h-75)
-    
     p.setFont("Helvetica", 10)
-    p.drawString(50, h-100, f"TIKET ID: {t.get('ID', '-')}")
-    p.drawString(300, h-100, f"Tarikh: {t.get('Tarikh', '-')}")
-    p.drawString(50, h-115, f"Nama: {t.get('Customer', '-')}")
-    p.drawString(300, h-115, f"No HP: {t.get('Phone', '-')}")
-    p.drawString(50, h-130, f"Email: {t.get('Email', '-')}")
-    p.drawString(300, h-130, f"Model: {t.get('Model', '-')}")
+    p.drawString(50, h-100, f"TIKET ID: {t.get('ID', '-')}"); p.drawString(300, h-100, f"Tarikh: {t.get('Tarikh', '-')}")
+    p.drawString(50, h-115, f"Nama: {t.get('Customer', '-')}"); p.drawString(300, h-115, f"No HP: {t.get('Phone', '-')}")
+    p.drawString(50, h-130, f"Email: {t.get('Email', '-')}"); p.drawString(300, h-130, f"Model: {t.get('Model', '-')}")
     p.drawString(50, h-145, f"Serial No: {t.get('SN', '-')}")
-    
     y = h-170
     p.line(50, y+10, w-50, y+10)
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "DETAIL DIAGNOSIS:"); y-=15
@@ -197,16 +189,12 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(50, y, f"Fizikal: {t.get('Fizikal', '-')}"); y-=15
     p.drawString(50, y, f"Aksesori: {t.get('Aksesori', '-')}"); y-=15
     p.drawString(50, y, f"Nota Tambahan: {t.get('Tech_Note', '-')}"); y-=30
-    
     if type == "INVOICE":
-        p.setFont("Helvetica-Bold", 14)
-        p.drawString(50, y, f"TOTAL BILL: RM {safe_float(t.get('Harga_Jual', 0)):.2f}"); y-=30
-    
+        p.setFont("Helvetica-Bold", 14); p.drawString(50, y, f"TOTAL BILL: RM {safe_float(t.get('Harga_Jual', 0)):.2f}"); y-=30
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "TERMA & SYARAT:"); y-=15
     tc = ["1. Data hilang tanggungjawab sendiri.", "2. Barang tak tuntut > 3 bulan hak milik kedai.", "3. Warranty sparepart shj."]
     p.setFont("Helvetica", 8)
     for line in tc: p.drawString(50, y, line); y-=12
-    
     y -= 40
     p.drawString(50, y, "Tandatangan Pelanggan: _________________"); p.drawString(300, y, "Tandatangan Admin: _________________")
     p.save(); buffer.seek(0)
@@ -217,45 +205,30 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
     sender = st.session_state.email_user
     password = st.session_state.email_pass
     if not sender or not password: return False, "Sila set Email Kedai di menu Tetapan dahulu."
-    
     subject = f"Tiket DCK: {data['ID']} - {data['Model']}"
     body = f"""Hai {data['Customer']},
 
 Terima kasih berurusan dengan DCK TECH.
 Berikut adalah salinan tiket digital anda.
 
---- BUTIRAN PERANTI ---
 ID Tiket: {data['ID']}
 Model: {data['Model']}
 S/N: {data.get('SN', '-')}
-
---- DIAGNOSIS ---
 Masalah: {data.get('Masalah', '-')}
-Fizikal: {data.get('Fizikal', '-')}
-Aksesori: {data.get('Aksesori', '-')}
-Nota: {data.get('Tech_Note', '-')}
-
 Status Semasa: {data['Status']}
 
-Sila rujuk lampiran PDF untuk dokumen rasmi.
+Sila rujuk lampiran PDF.
 
 Sekian,
 DCK Tech Team"""
-
-    msg = MIMEMultipart()
-    msg['From'] = sender
-    msg['To'] = to_email
-    msg['Subject'] = subject
+    msg = MIMEMultipart(); msg['From'] = sender; msg['To'] = to_email; msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
     part = MIMEApplication(pdf_buffer.getvalue(), Name=pdf_name)
     part['Content-Disposition'] = f'attachment; filename="{pdf_name}"'
     msg.attach(part)
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender, password)
-        server.send_message(msg)
-        server.quit()
+        server = smtplib.SMTP('smtp.gmail.com', 587); server.starttls()
+        server.login(sender, password); server.send_message(msg); server.quit()
         return True, "Email berjaya dihantar!"
     except Exception as e: return False, f"Gagal hantar: {str(e)}"
 
@@ -264,9 +237,7 @@ PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVE
 try: current_index = PAGES.index(st.session_state.page)
 except: current_index = 0
 selected_page = st.sidebar.radio("NAVIGASI UTAMA", PAGES, index=current_index)
-if selected_page != st.session_state.page:
-    st.session_state.page = selected_page
-    st.rerun()
+if selected_page != st.session_state.page: st.session_state.page = selected_page; st.rerun()
 
 # === PAGE: TETAPAN ===
 if st.session_state.page == "⚙️ TETAPAN":
@@ -275,8 +246,7 @@ if st.session_state.page == "⚙️ TETAPAN":
         eu = st.text_input("Email Kedai (Gmail)", value=st.session_state.email_user)
         ep = st.text_input("App Password", value=st.session_state.email_pass, type="password")
         if st.form_submit_button("Simpan"):
-            st.session_state.email_user = eu
-            st.session_state.email_pass = ep
+            st.session_state.email_user = eu; st.session_state.email_pass = ep
             st.toast("Tetapan berjaya disimpan!", icon='✅')
 
 # === PAGE: DASHBOARD ===
@@ -297,9 +267,7 @@ elif st.session_state.page == "📊 DASHBOARD":
             with st.expander(f"{row.get('ID', '-')} - {row.get('Customer', '-')} ({row.get('Status', '-')})"):
                 st.write(f"Model: {row.get('Model', '-')} | Masalah: {row.get('Masalah', '-')}")
                 if st.button("🔧 Manage Job", key=f"btn_{row['ID']}"):
-                    st.session_state.selected_id = row['ID']
-                    st.session_state.page = "🔧 UPDATE STATUS"
-                    st.rerun()
+                    st.session_state.selected_id = row['ID']; st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
 
 # === PAGE: DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
@@ -308,11 +276,9 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         st.markdown("### 1. Info Pelanggan")
         c1, c2, c3 = st.columns(3)
         nama = c1.text_input("Nama"); phone = c2.text_input("No HP"); email = c3.text_input("Email (Optional)")
-        
         st.markdown("### 2. Info Peranti")
         c4, c5, c6 = st.columns(3)
         model = c4.text_input("Model"); sn = c5.text_input("Serial No"); pwd = c6.text_input("Password Device")
-        
         st.markdown("### 3. Diagnosis")
         mslh = st.multiselect("Masalah", ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada Display", "Tiada Power", "Format", "Upgrade", "Lain-lain"])
         fiz = st.multiselect("Fizikal", ["Calar", "Pecah", "Skru Hilang", "Sempurna"])
@@ -320,7 +286,6 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         note = st.text_area("Nota Tambahan")
         uploaded_files = st.file_uploader("Pilih Gambar", accept_multiple_files=True, type=['jpg','png','jpeg'])
         tnc = st.checkbox("Setuju T&C")
-        
         if st.button("SIMPAN REKOD & SEND NOTIF", use_container_width=True):
             if nama and tnc:
                 with st.spinner("Processing..."):
@@ -339,8 +304,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
 
     if 'last_data' in st.session_state:
         ld = st.session_state.last_data
-        st.divider()
-        st.success(f"Tiket {ld['ID']} Telah Dibuka!")
+        st.divider(); st.success(f"Tiket {ld['ID']} Telah Dibuka!")
         col_pdf, col_wa, col_email = st.columns(3)
         with col_pdf: st.download_button("📥 1. Download Tiket", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
         with col_wa: st.link_button("📱 2. WhatsApp", generate_links("WA", ld['Phone'], ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'], ld['Tech_Note']), use_container_width=True)
@@ -453,7 +417,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             if st.form_submit_button("Simpan"):
                                 update_part_data(eid, n, s, h, w); st.toast("Part dikemaskini!", icon='✅'); time.sleep(1); st.rerun()
                 with t_add:
-                    # FIX: CLEAR FORM ON SUBMIT
                     with st.form("ap", clear_on_submit=True):
                         n = st.text_input("Part"); s = st.text_input("Supp")
                         c_a1, c_a2 = st.columns(2)
@@ -464,7 +427,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             add_row("Parts", [f"P-{int(time.time())}", pid, n, s, str(datetime.now().date()), w, exp_date, h])
                             st.toast("Part ditambah!", icon='➕'); time.sleep(1); st.rerun()
 
-# === PAGE: INVENTORY & LAPORAN ===
+# === PAGE: INVENTORY ===
 elif st.session_state.page == "📦 INVENTORY":
     st.title("📦 Inventory Log")
     df_p = load_data("Parts")
@@ -478,9 +441,12 @@ elif st.session_state.page == "📦 INVENTORY":
                     st.session_state.page = "🔧 UPDATE STATUS"
                     st.rerun()
 
+# === PAGE: LAPORAN (UPDATED: WITH PARTS ANALYSIS) ===
 elif st.session_state.page == "📈 LAPORAN":
     st.title("📈 Laporan Prestasi")
     df = load_data("Tickets")
+    df_p = load_data("Parts") # LOAD PARTS DATA
+    
     if not df.empty:
         df['Tarikh'] = pd.to_datetime(df['Tarikh'], errors='coerce')
         df['Harga_Jual'] = df['Harga_Jual'].apply(safe_float)
@@ -489,10 +455,31 @@ elif st.session_state.page == "📈 LAPORAN":
         m1, m2 = st.columns(2)
         m1.metric("Total Sales", f"RM {df['Harga_Jual'].sum():.2f}")
         m2.metric("Total Untung", f"RM {df['Untung'].sum():.2f}")
+        
         st.divider()
-        if 'Masalah' in df.columns:
-            all_text = ",".join(df['Masalah'].astype(str).tolist())
-            all_items = [x.strip() for x in all_text.split(",") if x.strip() != ""]
-            if all_items: st.bar_chart(pd.Series(all_items).value_counts().head(10))
+        c_prob, c_parts = st.columns(2)
+        
+        # 1. CHART MASALAH
+        with c_prob:
+            st.subheader("🔧 Masalah Paling Kerap")
+            if 'Masalah' in df.columns:
+                all_text = ",".join(df['Masalah'].astype(str).tolist())
+                all_items = [x.strip() for x in all_text.split(",") if x.strip() != ""]
+                if all_items: st.bar_chart(pd.Series(all_items).value_counts().head(5))
+        
+        # 2. CHART PARTS (BARANG LAJU) - INI YANG BOSS NAK
+        with c_parts:
+            st.subheader("🔩 Alat Ganti Laris")
+            if not df_p.empty and 'NamaPart' in df_p.columns:
+                part_counts = df_p['NamaPart'].value_counts().head(5)
+                st.bar_chart(part_counts)
+            else:
+                st.info("Tiada data part.")
+
         st.divider()
+        st.subheader("📅 Trend Jualan")
+        tab_h, tab_m, tab_b = st.tabs(["Harian", "Mingguan", "Bulanan"])
+        with tab_h: st.line_chart(df.groupby(df['Tarikh'].dt.date)[['Harga_Jual', 'Untung']].sum().tail(30))
+        with tab_m: st.bar_chart(df.groupby(df['Tarikh'].dt.to_period('W').astype(str))[['Harga_Jual', 'Untung']].sum())
+        with tab_b: st.bar_chart(df.groupby(df['Tarikh'].dt.to_period('M').astype(str))[['Harga_Jual', 'Untung']].sum())
         st.download_button("📥 Download CSV", df.to_csv(index=False).encode('utf-8'), "Laporan.csv", "text/csv")
