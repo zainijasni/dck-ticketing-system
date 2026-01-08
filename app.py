@@ -33,6 +33,7 @@ if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 if 'email_user' not in st.session_state: st.session_state.email_user = ""
 if 'email_pass' not in st.session_state: st.session_state.email_pass = ""
+if 'pos_cart' not in st.session_state: st.session_state.pos_cart = [] # BAKUL JUALAN BARU
 if 'config' not in st.session_state:
     st.session_state.config = {
         "Company_Name": "DCK TECH SERVICES",
@@ -175,9 +176,8 @@ def delete_part(part_id):
     if cell: robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
     return False
 
-# --- 4. PDF GENERATOR (WITH TEXT WRAP FIX) ---
+# --- 4. PDF GENERATOR (UPDATED FOR MULTI-ITEM) ---
 def draw_wrapped_text(c, text, x, y, max_width, font="Helvetica", size=10):
-    """Fungsi ajaib untuk turunkan tulisan ke bawah kalau panjang"""
     c.setFont(font, size)
     text = str(text)
     words = text.split()
@@ -185,7 +185,6 @@ def draw_wrapped_text(c, text, x, y, max_width, font="Helvetica", size=10):
     current_line = []
     
     for word in words:
-        # Cuba tambah perkataan, check panjang
         test_line = ' '.join(current_line + [word])
         if c.stringWidth(test_line, font, size) < max_width:
             current_line.append(word)
@@ -194,13 +193,11 @@ def draw_wrapped_text(c, text, x, y, max_width, font="Helvetica", size=10):
             current_line = [word]
     lines.append(' '.join(current_line))
     
-    # Lukis setiap baris
     curr_y = y
     for line in lines:
         c.drawString(x, curr_y, line)
-        curr_y -= (size + 2) # Jarak antara baris
-    
-    return curr_y # Return posisi Y baru
+        curr_y -= (size + 2)
+    return curr_y
 
 def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
@@ -236,31 +233,30 @@ def generate_pdf(t, type="SERVICE"):
     p.setFont("Helvetica-Bold", 10); p.drawString(50, h-155, "CUSTOMER DETAILS:")
     p.setFont("Helvetica", 10)
     
-    if 'Model' in t: # Service
+    if 'Model' in t: # Service Ticket
         p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}"); p.drawString(300, h-175, f"Ticket ID: {t.get('ID', '-')}")
         p.drawString(50, h-190, f"Phone: {t.get('Phone', '-')}"); p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
         p.drawString(50, h-205, f"Email: {t.get('Email', '-')}"); p.drawString(300, h-205, f"S/N: {t.get('SN', '-')}")
-    else: # Sales
-        p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}"); p.drawString(300, h-175, f"Receipt ID: {t.get('ID', '-')}")
+    else: # Sales Receipt (Multi-Item)
+        p.drawString(50, h-175, f"Name: {t.get('Customer', '-')}")
+        p.drawString(300, h-175, f"Receipt ID: {t.get('ID', '-')}")
         p.drawString(300, h-190, f"Date: {t.get('Tarikh', '-')}")
 
-    # 3. CONTENT TABLE (WITH WRAPPING FIX)
+    # 3. CONTENT TABLE
     y = h-250
     p.setFont("Helvetica-Bold", 11)
     p.setFillColorRGB(0.9, 0.9, 0.9)
     p.rect(40, y, w-80, 20, fill=1)
     p.setFillColorRGB(0, 0, 0)
     
-    if 'Model' in t:
+    if 'Model' in t: # --- TIKET SERVICE ---
         p.drawString(50, y+6, "DEVICE / MODEL"); p.drawString(250, y+6, "DIAGNOSIS / PROBLEM"); p.drawString(450, y+6, "REMARKS")
         y -= 25
         
-        # GUNA WRAPPING FUNCTION DI SINI
         y_model = draw_wrapped_text(p, t.get('Model', '-'), 50, y, 180)
         y_prob = draw_wrapped_text(p, t.get('Masalah', '-'), 250, y, 180)
         y_note = draw_wrapped_text(p, t.get('Tech_Note', '-'), 450, y, 100)
         
-        # Cari Y paling rendah untuk baris seterusnya
         y = min(y_model, y_prob, y_note) - 15
         p.line(40, y, w-40, y)
         
@@ -268,16 +264,22 @@ def generate_pdf(t, type="SERVICE"):
         p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "Condition & Accessories:")
         p.setFont("Helvetica", 10); p.drawString(200, y, f"{t.get('Fizikal', '-')} | {t.get('Aksesori', '-')}")
         
-    else:
+    else: # --- MULTI-ITEM SALES ---
         p.drawString(50, y+6, "ITEM DESCRIPTION"); p.drawString(350, y+6, "QTY"); p.drawString(450, y+6, "PRICE")
         y -= 25
         p.setFont("Helvetica", 10)
-        # Sales item biasanya pendek, tapi kita wrap juga just in case
-        y_item = draw_wrapped_text(p, str(t.get('Item', '-')), 50, y, 280)
-        p.drawString(350, y, str(t.get('Qty', '-')))
-        p.drawString(450, y, f"RM {safe_float(t.get('Harga_Unit', 0)):.2f}")
         
-        y = y_item - 15
+        # Check if list or single item (Backward Compatibility)
+        items = t.get('Items_List', [])
+        if not items: # Fallback for single item
+            items = [{'Item': t.get('Item'), 'Qty': t.get('Qty'), 'Harga_Unit': t.get('Harga_Unit')}]
+            
+        for itm in items:
+            p.drawString(350, y, str(itm.get('Qty', 1)))
+            p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
+            y_item = draw_wrapped_text(p, str(itm.get('Item', '-')), 50, y, 280)
+            y = y_item - 10 # Spacing between items
+            
         p.line(40, y, w-40, y)
 
     # 4. TOTAL & FOOTER
@@ -287,7 +289,6 @@ def generate_pdf(t, type="SERVICE"):
         p.setFont("Helvetica-Bold", 14)
         p.drawRightString(w-50, y, f"TOTAL: RM {total:.2f}")
     
-    # Terms
     y_footer = 150
     p.line(40, y_footer, w-40, y_footer)
     p.setFont("Helvetica-Bold", 9); p.drawString(40, y_footer-15, "TERMS & CONDITIONS:")
@@ -439,47 +440,81 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m, icon='✅')
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI ===
+# === PAGE: JUALAN KEDAI (MULTI-ITEM CART SYSTEM) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
-    tab_pos, tab_manage = st.tabs(["🛒 Jualan Baru", "📋 Urus Jualan"])
+    tab_pos, tab_manage = st.tabs(["🛒 Kaunter Bayaran", "📋 Rekod Jualan"])
     
     with tab_pos:
-        with st.form("pos_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            item = c1.text_input("Nama Barang"); cust = c2.text_input("Nama Pelanggan", value="Walk-in")
-            c3, c4, c5 = st.columns(3)
-            qty = c3.number_input("Qty", 1, 100, 1); price = c4.number_input("Harga Unit (RM)", 0.0)
-            pay = st.selectbox("Bayaran", ["Cash", "QR", "Transfer"])
-            sub_pos = st.form_submit_button("✅ REKOD JUALAN")
+        # 1. ADD ITEM TO CART
+        with st.container(border=True):
+            st.subheader("➕ Tambah Barang")
+            with st.form("add_item_form", clear_on_submit=True):
+                c1, c2, c3 = st.columns([3, 1, 1])
+                item = c1.text_input("Nama Barang")
+                qty = c2.number_input("Qty", 1, 100, 1)
+                price = c3.number_input("Harga Unit (RM)", 0.0)
+                add_btn = st.form_submit_button("Masuk Bakul")
+                
+                if add_btn and item and price > 0:
+                    st.session_state.pos_cart.append({"Item": item, "Qty": qty, "Harga_Unit": price, "Total": qty * price})
+                    st.toast(f"{item} ditambah!", icon='🛒')
+        
+        # 2. SHOW CART & CHECKOUT
+        if st.session_state.pos_cart:
+            st.divider()
+            st.subheader("🛍️ Bakul Jualan")
+            cart_df = pd.DataFrame(st.session_state.pos_cart)
+            st.dataframe(cart_df, use_container_width=True)
             
-            if sub_pos:
-                if item and price > 0:
-                    total = qty * price
+            grand_total = cart_df['Total'].sum()
+            st.metric("GRAND TOTAL", f"RM {grand_total:.2f}")
+            
+            with st.form("checkout_form"):
+                c1, c2 = st.columns(2)
+                cust_name = c1.text_input("Nama Pelanggan", "Walk-in")
+                pay_method = c2.selectbox("Cara Bayaran", ["Cash", "QR DuitNow", "Online Transfer"])
+                
+                if st.form_submit_button("✅ Bayar & Cetak Resit", use_container_width=True):
+                    # Save to DB
                     sid = f"SALE-{datetime.now().strftime('%d%H%M')}"
-                    add_row("Sales", [sid, datetime.now().strftime("%Y-%m-%d"), item, qty, price, total, cust, pay])
-                    st.toast("Jualan Direkod!", icon='💰')
-                    st.session_state.last_sale = {"ID": sid, "Tarikh": datetime.now().strftime("%Y-%m-%d"), "Item": item, "Qty": qty, "Harga_Unit": price, "Total": total, "Customer": cust}
+                    tgl = datetime.now().strftime("%Y-%m-%d")
+                    
+                    for row in st.session_state.pos_cart:
+                        add_row("Sales", [sid, tgl, row['Item'], row['Qty'], row['Harga_Unit'], row['Total'], cust_name, pay_method])
+                    
+                    # Prepare Data for Receipt
+                    st.session_state.last_sale = {
+                        "ID": sid, "Tarikh": tgl, "Customer": cust_name, 
+                        "Total": grand_total, "Items_List": st.session_state.pos_cart
+                    }
+                    
+                    # Clear Cart
+                    st.session_state.pos_cart = []
+                    st.toast("Transaksi Berjaya!", icon='💰')
                     time.sleep(1); st.rerun()
-        if 'last_sale' in st.session_state:
-            st.download_button("🖨️ Resit", generate_pdf(st.session_state.last_sale, "SALES"), "Resit.pdf", use_container_width=True)
+            
+            if st.button("❌ Kosongkan Bakul"):
+                st.session_state.pos_cart = []
+                st.rerun()
+
+        # 3. PRINT RECEIPT (LAST TRANSACTION)
+        if 'last_sale' in st.session_state and st.session_state.last_sale:
+            st.divider()
+            st.success("Transaksi Selesai.")
+            st.download_button("🖨️ CETAK RESIT", generate_pdf(st.session_state.last_sale, "SALES"), "Resit_Jualan.pdf", use_container_width=True)
 
     with tab_manage:
         df_s = load_data("Sales")
         if not df_s.empty:
             st.dataframe(df_s)
-            sale_id = st.selectbox("Pilih ID Jualan:", ["-"] + df_s['ID'].tolist())
+            sale_id = st.selectbox("Pilih ID Transaksi:", ["-"] + df_s['ID'].unique().tolist()) # Unique ID only
             if sale_id != "-":
-                curr = df_s[df_s['ID'] == sale_id].iloc[0]
-                with st.form("edit_sale"):
-                    e_item = st.text_input("Item", curr['Item'])
-                    e_qty = st.number_input("Qty", value=int(curr['Qty']))
-                    e_price = st.number_input("Harga Unit", value=float(curr['Harga_Unit']))
-                    c_del, c_upd = st.columns(2)
-                    if c_del.form_submit_button("🗑️ Hapus"): delete_row_data("Sales", sale_id); st.rerun()
-                    if c_upd.form_submit_button("💾 Update"):
-                        update_cell_data("Sales", sale_id, {3: e_item, 4: e_qty, 5: e_price, 6: e_qty * e_price})
-                        st.toast("Jualan Dikemaskini!", icon='✅'); time.sleep(1); st.rerun()
+                st.info(f"Menguruskan Transaksi: {sale_id}")
+                if st.button("🗑️ Hapus Seluruh Transaksi"):
+                    delete_row_data("Sales", sale_id)
+                    st.toast("Transaksi Dihapus!", icon='🗑️')
+                    time.sleep(1); st.rerun()
 
 # === PAGE: UPDATE STATUS ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
