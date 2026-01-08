@@ -114,7 +114,18 @@ def load_data(tab_name):
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
-        if tab_name == "Tickets" and not df.empty and "Email" not in df.columns: df["Email"] = ""
+        
+        # --- PATCH: KALAU DATAFRAME KOSONG, PAKSA ADA HEADER ---
+        # Ini untuk elak KeyError kalau sheet kosong
+        if df.empty:
+            if tab_name == "Tickets":
+                df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
+            elif tab_name == "Parts":
+                 df = pd.DataFrame(columns=["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"])
+            elif tab_name == "Sales":
+                 df = pd.DataFrame(columns=["ID", "Tarikh", "Item", "Qty", "Harga_Unit", "Total", "Customer", "PaymentMethod"])
+
+        if tab_name == "Tickets" and "Email" not in df.columns: df["Email"] = ""
         return df
     except: return pd.DataFrame()
 
@@ -343,7 +354,6 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
 
 # =============================================================================
 # 🚦 V66 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (TRAFFIC LIGHT)
-# Code ini diletakkan di SINI supaya function 'load_data' kat atas dah boleh guna.
 # =============================================================================
 
 # Dapatkan parameter dari URL (Contoh: ?sn=A123)
@@ -352,7 +362,6 @@ sn_query = query_params.get("sn", None)
 
 if sn_query:
     # --- MOD PUBLIC (DIGITAL HEALTH CARD) ---
-    # 1. Sorok menu Admin supaya orang luar tak boleh tekan
     st.markdown("""
     <style>
         [data-testid="stSidebar"] {display: none;}
@@ -361,36 +370,28 @@ if sn_query:
     </style>
     """, unsafe_allow_html=True)
 
-    # 2. Setup Database & Config
     load_config()
     cfg = st.session_state.config
     
-    # 3. Header
     c_logo, c_title = st.columns([1, 4])
     with c_title:
         st.title(f"🛡️ {cfg.get('Company_Name', 'DCK TECH')} - Health Card")
         st.caption("Verifikasi Status & Sejarah Peranti Digital")
     st.divider()
 
-    # 4. Cari Data
     with st.spinner(f"🔍 Menyemak rekod untuk S/N: {sn_query}..."):
         df = load_data("Tickets")
         
     found = False
     if not df.empty:
-        # Cari SN (Case Insensitive & Buang Whitespace)
-        # Kita ambil semua rekod berkaitan SN ni
         history = df[df['SN'].astype(str).str.strip().str.upper() == str(sn_query).strip().upper()]
         
         if not history.empty:
             found = True
-            # Ambil data paling latest (rekod terakhir)
             latest = history.iloc[-1]
             
-            # --- DISPLAY UTAMA (PUBLIC VIEW) ---
             st.success("✅ Peranti Sah & Berdaftar")
             
-            # Kad Info (Tanpa Data Sensitif Customer)
             with st.container(border=True):
                 c1, c2 = st.columns(2)
                 c1.write(f"**Model:** {latest.get('Model')}")
@@ -403,7 +404,6 @@ if sn_query:
                 st.info(f"{latest.get('Masalah')}")
                 st.write(f"*Nota Tech: {latest.get('Tech_Note', '-')}")
 
-            # Sejarah Servis Terdahulu (Jika ada lebih dari 1)
             if len(history) > 1:
                 with st.expander(f"📜 Lihat Sejarah Servis Terdahulu ({len(history)} rekod)"):
                     st.dataframe(
@@ -411,14 +411,12 @@ if sn_query:
                         hide_index=True,
                         use_container_width=True
                     )
-            
             st.caption(f"Disahkan oleh sistem {cfg.get('Company_Name')}")
 
     if not found:
         st.error(f"❌ Maaf, tiada rekod dijumpai untuk S/N: {sn_query}")
         st.warning("Sila pastikan Serial Number dimasukkan dengan betul atau hubungi kedai kami.")
 
-    # 5. STOP EXECUTION - Jangan load dashboard admin di bawah
     st.stop()
 # =============================================================================
 
@@ -510,7 +508,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m, icon='✅')
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI (V64 - QUICK DELETE) ===
+# === PAGE: JUALAN KEDAI ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     tab_pos, tab_manage = st.tabs(["🛒 Kaunter Bayaran", "📋 Rekod Jualan"])
@@ -531,8 +529,6 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
             st.divider()
             st.subheader("🛍️ Bakul Jualan")
             st.markdown("---")
-            
-            # --- NEW QUICK DELETE UI ---
             for i, row in enumerate(st.session_state.pos_cart):
                 c1, c2, c3, c4 = st.columns([3, 1, 1, 0.5])
                 c1.write(f"**{row['Item']}**")
@@ -541,7 +537,6 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                 if c4.button("❌", key=f"del_{i}"):
                     st.session_state.pos_cart.pop(i)
                     st.rerun()
-            # ---------------------------
             
             st.markdown("---")
             grand_total = sum([x['Total'] for x in st.session_state.pos_cart])
@@ -636,7 +631,12 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
         with c_r:
             df_p = load_data("Parts")
-            parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
+            # --- FIX: CHECK IF DATAFRAME HAS DATA & COLUMNS BEFORE FILTERING ---
+            if not df_p.empty and 'TicketID' in df_p.columns:
+                 parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
+            else:
+                 parts = pd.DataFrame()
+            
             kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
             
             t1, t2 = st.tabs(["Status", "Parts"])
