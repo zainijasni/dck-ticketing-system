@@ -193,14 +193,12 @@ def init_db():
         st.session_state.db_ready = True
 
     except Exception as e:
-        # Jika masih error, kita biarkan dulu supaya app tak crash
         pass
 
 # Panggil Init Sekali Sahaja di sini
 init_db()
 
 # --- DATA LOADING (V80: Optimized Cache) ---
-# Kita buang cache untuk Tickets/Parts supaya real-time, tapi Inventory boleh cache sikit
 def load_data(tab_name):
     client = get_client()
     try:
@@ -302,16 +300,22 @@ def check_and_update_master(code, name, cost, sell, qty, supplier):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
+        # Cari berdasarkan KOD dulu
         cell = sheet.find(str(code))
+        
+        # Kalau kod tak jumpa, cari based on nama (exact match) untuk merge
+        if not cell:
+            cell = sheet.find(str(name))
+            
         if cell:
-            # Update existing
+            # Barang dah ada, kita UPDATE kuantiti
             curr_qty = safe_int(sheet.cell(cell.row, 5).value)
             sheet.update_cell(cell.row, 5, curr_qty + int(qty)) # Update Stock
-            sheet.update_cell(cell.row, 3, cost) # Update Cost
-            sheet.update_cell(cell.row, 4, sell) # Update Sell
+            sheet.update_cell(cell.row, 3, cost) # Update Cost (Latest)
+            sheet.update_cell(cell.row, 4, sell) # Update Sell (Latest)
             sheet.update_cell(cell.row, 6, supplier) # Update Supplier
         else:
-            # Create new
+            # Barang baru, kita create
             tgl = datetime.now().strftime("%Y-%m-%d")
             sheet.append_row([code, name, cost, sell, qty, supplier, tgl])
         return True
@@ -545,7 +549,7 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
         return False, str(e)
 
 # =============================================================================
-# 🚦 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
+# 🚦 V70 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
 # =============================================================================
 query_params = st.query_params 
 sn_query = query_params.get("sn", None)
@@ -562,6 +566,7 @@ if sn_query:
     load_config()
     cfg = st.session_state.config
     
+    # Header: Digital Profile
     c_logo, c_title = st.columns([1, 4])
     with c_title:
         st.title(f"💻 {cfg.get('Company_Name', 'DCK TECH')} - Digital Profile")
@@ -708,16 +713,23 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         ld = st.session_state.last_data
         st.divider()
         st.success(f"Tiket {ld['ID']} Telah Dibuka!")
+        
+        # V83: UNIFIED BUTTONS (Seragamkan Button)
         c1, c2, c3 = st.columns(3)
-        c1.download_button("📥 PDF Tiket", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
-        c2.link_button("📱 WhatsApp", generate_links("WA", ld), use_container_width=True)
-        if ld['Email']:
-            if c3.button("📧 Email Auto"):
-                ok, m = send_email_with_pdf(ld['Email'], ld, generate_pdf(ld, "SERVICE"), "Tiket.pdf")
-                if ok:
-                    st.toast(m, icon='✅')
-                else:
-                    st.error(m)
+        with c1:
+            st.download_button("📥 PDF Tiket", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
+        with c2:
+            st.link_button("📱 WhatsApp", generate_links("WA", ld), use_container_width=True)
+        with c3:
+            if ld['Email']:
+                if st.button("📧 Email Auto", use_container_width=True):
+                    ok, m = send_email_with_pdf(ld['Email'], ld, generate_pdf(ld, "SERVICE"), "Tiket.pdf")
+                    if ok:
+                        st.toast(m, icon='✅')
+                    else:
+                        st.error(m)
+            else:
+                st.button("📧 Tiada Email", disabled=True, use_container_width=True)
 
 # === PAGE: JUALAN KEDAI ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
@@ -912,8 +924,22 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             time.sleep(1)
                             st.rerun()
 
+                # V83: UNIFIED BUTTONS (Status Done/Collected)
                 if selected_status in ["Done", "Collected"]:
-                    st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+                    bc1, bc2, bc3 = st.columns(3)
+                    with bc1:
+                        st.download_button("🖨️ Resit PDF", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+                    with bc2:
+                        wa_url = generate_links("WA", job)
+                        st.link_button("📱 WhatsApp", wa_url, use_container_width=True)
+                    with bc3:
+                        if job.get('Email'):
+                            if st.button("📧 Email PDF", use_container_width=True):
+                                ok, m = send_email_with_pdf(job.get('Email'), job, generate_pdf(job, "INVOICE"), "Status.pdf")
+                                if ok: st.toast(m, icon='✅')
+                                else: st.error(m)
+                        else:
+                            st.button("📧 Tiada Email", disabled=True, use_container_width=True)
 
             # --- PARTS SECTION ---
             st.write("### 🔩 Parts Digunakan")
@@ -963,29 +989,22 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     buffer = BytesIO()
                     img_qr.save(buffer, format="PNG")
                     st.image(buffer.getvalue(), caption=f"S/N: {job.get('SN')}", use_container_width=True)
-                
-                st.markdown("---")
-                wa_url = generate_links("WA", job)
-                st.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
-                
-                if job.get('Email'):
-                    if st.button("📧 Email PDF"):
-                        doc = "INVOICE" if job.get('Status') in ['Done', 'Collected'] else "SERVICE"
-                        ok, m = send_email_with_pdf(job.get('Email'), job, generate_pdf(job, doc), "Status.pdf")
-                        if ok: st.toast(m, icon='✅')
-                        else: st.error(m)
+                    
+                    # V83: SHOW LINK TEXT
+                    st.text_input("URL Link (Copy)", value=qr_data, read_only=True)
+                    st.caption("👉 Right-click gambar QR > 'Save Image' untuk print.")
 
-# === PAGE: PENGURUSAN STOK ===
+# === PAGE: PENGURUSAN STOK (V83: ADDED MANUAL ADJUSTMENT) ===
 elif st.session_state.page == "📦 PENGURUSAN STOK":
     st.title("📦 Pengurusan Stok (Inventory)")
-    t_restock, t_master, t_log = st.tabs(["📥 Masuk Stok (Restock)", "📋 Master List", "📜 Log Pembelian"])
+    t_restock, t_adjust, t_master, t_log = st.tabs(["📥 Masuk Stok (Restock)", "🛠️ Manual Adjustment", "📋 Master List", "📜 Log Pembelian"])
     
+    # TAB 1: RESTOCK
     with t_restock:
         st.subheader("1. Maklumat Invoice")
         c1, c2 = st.columns(2)
         inv_no = c1.text_input("No Invoice / Resit Supplier")
         
-        # Supplier Selection Logic
         ref_df = load_data("Ref_Data")
         std_supp = ref_df[ref_df['Type'] == 'Supplier']['Value'].tolist() if not ref_df.empty else []
         
@@ -1067,6 +1086,44 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     st.error("Sila isi No Invoice dan Nama Supplier.")
         else:
             st.info("List kosong. Sila isi barang di atas.")
+
+    # TAB 2: MANUAL ADJUSTMENT (V83 NEW)
+    with t_adjust:
+        st.subheader("🛠️ Manual Stock Adjustment")
+        st.info("Gunakan ini untuk betulkan stok jika ada yang rosak, hilang, atau salah kira.")
+        
+        df_m = load_data("Master_Inventory")
+        
+        if not df_m.empty:
+            adj_options = {}
+            for idx, row in df_m.iterrows():
+                adj_options[f"{row['ItemName']} (Stok Semasa: {row['CurrentStock']})"] = row
+            
+            with st.form("adj_form"):
+                sel_adj = st.selectbox("Pilih Barang", list(adj_options.keys()))
+                adj_qty = st.number_input("Adjustment Qty (Contoh: -1 untuk tolak, 5 untuk tambah)", step=1)
+                adj_reason = st.text_input("Sebab Adjustment (Contoh: Rosak / Hilang / Jumpa Stok)")
+                
+                if st.form_submit_button("Kemaskini Stok"):
+                    if sel_adj and adj_qty != 0 and adj_reason:
+                        item_dat = adj_options[sel_adj]
+                        
+                        # 1. Update Stock
+                        update_stock(item_dat['ItemCode'], adj_qty)
+                        
+                        # 2. Log it
+                        log_id = f"ADJ-{int(time.time())}"
+                        tgl = datetime.now().strftime("%Y-%m-%d")
+                        # Format: LogID, Date, InvoiceNo, Supplier, ItemName, QtyAdded, CostPrice, TotalCost
+                        add_row("Restock_Log", [log_id, tgl, "ADJUSTMENT", "N/A", item_dat['ItemName'], adj_qty, item_dat['CostPrice'], f"Reason: {adj_reason}"])
+                        
+                        st.success(f"Stok {item_dat['ItemName']} berjaya dilaraskan ({adj_qty}).")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.warning("Sila isi semua maklumat.")
+        else:
+            st.warning("Tiada stok dalam Master List.")
 
     with t_master:
         df_m = load_data("Master_Inventory")
