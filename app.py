@@ -361,6 +361,7 @@ sn_query = query_params.get("sn", None)
 
 if sn_query:
     # --- MOD PUBLIC (DIGITAL HEALTH CARD) ---
+    # Ini Bypass Login/Menu Admin. Sesiapa ada link ni boleh tengok.
     st.markdown("""
     <style>
         [data-testid="stSidebar"] {display: none;}
@@ -608,16 +609,17 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
             st.divider()
             
-            # --- 🖨️ V67: QR CODE STICKER GENERATOR ---
+            # --- 🖨️ V67.1: QR CODE STICKER (HARDCODED URL) ---
             with st.expander("🖨️ GENERATE QR STICKER (HEALTH CARD)"):
                 st.info("Tampal ini di bawah laptop customer.")
-                # User kena masukkan link sekali je, atau hardcode sini.
-                app_url = st.text_input("Link Sistem Anda (Copy dari Browser)", value="https://dck-app.streamlit.app")
+                
+                # Boss tak payah isi dah. Saya dah letak link Boss kat sini.
+                my_url = "https://dck-ticketing-system-r7vonv3ctwvxzfh2yqn4s5.streamlit.app"
+                
+                app_url = st.text_input("Link Sistem (Auto-Set)", value=my_url)
                 
                 if app_url and job.get('SN'):
-                    # Clean slash
                     if app_url.endswith("/"): app_url = app_url[:-1]
-                    # Create Link
                     qr_data = f"{app_url}/?sn={job.get('SN')}"
                     
                     # Create QR
