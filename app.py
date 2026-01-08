@@ -20,7 +20,6 @@ cloudinary.config(
   secure = True
 )
 
-# ID Sheet Boss
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
 # --- LIST DATA ---
@@ -28,7 +27,7 @@ LIST_MASALAH = ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada 
 LIST_FIZIKAL = ["Calar Biasa", "Calar Teruk", "Skru Hilang", "Case Pecah", "I/O Port Rosak", "Sempurna"]
 LIST_AKSESORI = ["Beg", "Charger", "Mouse", "Tiada"]
 
-# --- 2. DATABASE ENGINE (AUTO-FIXER) ---
+# --- 2. DATABASE ENGINE ---
 @st.cache_resource
 def get_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -36,37 +35,27 @@ def get_client():
     return gspread.authorize(creds)
 
 def init_db():
-    """Fungsi ini akan check header sheet, kalau salah dia betulkan automatik"""
+    """Auto-Fix Header jika hilang"""
     client = get_client()
     sh = client.open_by_key(SHEET_ID)
     
-    # 1. SETUP TAB TICKETS
-    try:
-        ws = sh.worksheet("Tickets")
-    except:
-        ws = sh.add_worksheet("Tickets", 1000, 20)
+    # Setup Tickets Tab
+    try: ws = sh.worksheet("Tickets")
+    except: ws = sh.add_worksheet("Tickets", 1000, 20)
     
-    # Header Wajib
     header_t = ["ID", "Tarikh", "Customer", "Phone", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
-    current_header = ws.row_values(1)
-    if current_header != header_t:
-        ws.update("A1:O1", [header_t]) # Paksa update header
+    if ws.row_values(1) != header_t: ws.update("A1:O1", [header_t])
         
-    # 2. SETUP TAB PARTS
-    try:
-        ws_p = sh.worksheet("Parts")
-    except:
-        ws_p = sh.add_worksheet("Parts", 1000, 10)
+    # Setup Parts Tab
+    try: ws_p = sh.worksheet("Parts")
+    except: ws_p = sh.add_worksheet("Parts", 1000, 10)
         
     header_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
-    current_header_p = ws_p.row_values(1)
-    if current_header_p != header_p:
-        ws_p.update("A1:H1", [header_p])
+    if ws_p.row_values(1) != header_p: ws_p.update("A1:H1", [header_p])
 
 def load_data(tab_name):
     client = get_client()
-    # Paksa refresh header dulu
-    init_db()
+    init_db() # Jalankan auto-fix setiap kali load
     data = client.open_by_key(SHEET_ID).worksheet(tab_name).get_all_records()
     return pd.DataFrame(data)
 
@@ -81,12 +70,10 @@ def generate_pdf(t, type="SERVICE"):
     p = canvas.Canvas(buffer, pagesize=A4)
     w, h = A4
     
-    # Header
     p.setFont("Helvetica-Bold", 22); p.drawString(50, h-50, "DCK TECH SERVICES")
     p.setFont("Helvetica", 10); p.drawString(50, h-65, "Resit & Borang Penerimaan Servis")
     p.line(50, h-75, w-50, h-75)
     
-    # Info Utama
     p.setFont("Helvetica", 10)
     p.drawString(50, h-100, f"TIKET ID: {t.get('ID', '-')}")
     p.drawString(300, h-100, f"Tarikh: {t.get('Tarikh', '-')}")
@@ -95,11 +82,10 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(50, h-130, f"Model: {t.get('Model', '-')}")
     p.drawString(300, h-130, f"Serial No: {t.get('SN', '-')}")
     
-    # Password Feature (PENTING)
+    # PASSWORD (Kekal ada)
     p.setFont("Helvetica-Bold", 10)
     p.drawString(50, h-150, f"PASSWORD / PIN: {t.get('Password', 'Tiada')}")
     
-    # Masalah & Checklist
     y = h-180
     p.line(50, y+10, w-50, y+10)
     p.drawString(50, y, "DIAGNOSIS AWAL:"); y-=15
@@ -108,39 +94,34 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(50, y, f"Fizikal: {t.get('Fizikal', '-')}"); y-=12
     p.drawString(50, y, f"Aksesori: {t.get('Aksesori', '-')}"); y-=30
     
-    # Harga (Jika Invoice)
     if type == "INVOICE":
         p.setFont("Helvetica-Bold", 14)
         p.drawString(50, y, f"TOTAL PERLU DIBAYAR: RM {float(t.get('Harga_Jual', 0)):.2f}"); y-=30
     
-    # T&C
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "TERMA & SYARAT:"); y-=15
     tc = ["1. Data hilang bukan tanggungjawab kedai.", "2. Barang tak tuntut > 3 bulan jadi hak milik kedai.", "3. Warranty sparepart sahaja."]
     p.setFont("Helvetica", 8)
     for line in tc: p.drawString(50, y, line); y-=12
     
-    # Sign
     y -= 30
     p.drawString(50, y, "Tandatangan Pelanggan:"); p.drawString(300, y, "Tandatangan Admin:")
     p.line(50, y-30, 200, y-30); p.line(300, y-30, 450, y-30)
-    
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 4. NAVIGATION & STATE ---
+# --- 4. NAVIGATION ---
 if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 
-# --- 5. PAGE: DASHBOARD ---
 menu = st.sidebar.radio("MENU", ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY"], 
                         index=["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY"].index(st.session_state.page))
 
+# --- DASHBOARD ---
 if menu == "📊 DASHBOARD":
     st.title("📊 DCK Tech Dashboard")
     df = load_data("Tickets")
     
     if not df.empty:
-        # Statistik Status
         st.subheader("Status Semasa")
         c1, c2, c3, c4 = st.columns(4)
         c1.info(f"PENDING: {len(df[df['Status'] == 'Pending'])}")
@@ -148,7 +129,6 @@ if menu == "📊 DASHBOARD":
         c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
         c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
         
-        # Kewangan
         df['Harga_Jual'] = pd.to_numeric(df['Harga_Jual'], errors='coerce').fillna(0)
         df['Kos_Part'] = pd.to_numeric(df['Kos_Part'], errors='coerce').fillna(0)
         profit = df['Harga_Jual'].sum() - df['Kos_Part'].sum()
@@ -159,7 +139,6 @@ if menu == "📊 DASHBOARD":
         k2.metric("Total Profit", f"RM {profit:.2f}")
         
         st.divider()
-        # Search & Edit
         search = st.text_input("🔍 Cari Ticket:")
         if search: df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
         
@@ -172,7 +151,7 @@ if menu == "📊 DASHBOARD":
                     st.session_state.selected_id = row['ID']
                     st.rerun()
 
-# --- 6. PAGE: DAFTAR TIKET ---
+# --- DAFTAR TIKET ---
 elif menu == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     with st.container(border=True):
@@ -193,11 +172,12 @@ elif menu == "📝 DAFTAR TIKET":
             if nama and tnc:
                 tid = f"DCK-{datetime.now().strftime('%d%H%M')}"
                 u_img = cloudinary.uploader.upload(img)["secure_url"] if img else ""
-                # Susunan Wajib ikut Header init_db tadi
+                
+                # Susunan Row Mesti Sama dgn Header init_db
                 row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, model, sn, pwd, ", ".join(mslh), ", ".join(fiz), ", ".join(acc), "Pending", 0, 0, u_img, note]
                 add_row("Tickets", row)
+                
                 st.success("Berjaya!")
-                # Auto Download PDF
                 pdf_data = {"ID": tid, "Customer": nama, "Phone": phone, "Model": model, "SN": sn, "Password": pwd, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tarikh": row[1]}
                 st.session_state.last_pdf = pdf_data
                 st.rerun()
@@ -205,7 +185,7 @@ elif menu == "📝 DAFTAR TIKET":
     if 'last_pdf' in st.session_state:
         st.download_button("📥 Download PDF Tiket", generate_pdf(st.session_state.last_pdf, "SERVICE"), "Tiket.pdf")
 
-# --- 7. PAGE: UPDATE STATUS ---
+# --- UPDATE STATUS ---
 elif menu == "🔧 UPDATE STATUS":
     st.title("🔧 Bilik Technician")
     df = load_data("Tickets")
@@ -216,16 +196,22 @@ elif menu == "🔧 UPDATE STATUS":
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        # Display Info
+        # Display Info (Password ada)
         st.info(f"CUSTOMER: {job['Customer']} | MODEL: {job['Model']} | PWD: {job['Password']}")
         
         c1, c2 = st.columns([1, 2])
         with c1:
-            if job['Image_Link']: st.image(job['Image_Link'])
+            # --- FIX IMAGE ERROR DISINI ---
+            img_link = str(job['Image_Link'])
+            if img_link.startswith("http"): # Cuma papar jika link valid
+                st.image(img_link)
+            else:
+                st.caption("Tiada Gambar / Format Salah")
+            # ------------------------------
+            
             st.download_button("Print Tiket Asal", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
             
         with c2:
-            # Auto Calc Cost
             df_p = load_data("Parts")
             parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             total_kos = pd.to_numeric(parts['HargaBeli'], errors='coerce').sum() if not parts.empty else 0
@@ -240,7 +226,6 @@ elif menu == "🔧 UPDATE STATUS":
                 if st.form_submit_button("UPDATE"):
                     sh = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
                     cl = sh.find(str(pid))
-                    # Update col 11(Status), 12(Kos), 13(Jual), 15(Note)
                     sh.update_cell(cl.row, 11, stt)
                     sh.update_cell(cl.row, 12, total_kos)
                     sh.update_cell(cl.row, 13, hj)
@@ -262,7 +247,7 @@ elif menu == "🔧 UPDATE STATUS":
                     add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), 0, "", hb])
                     st.rerun()
 
-# --- 8. PAGE: INVENTORY ---
+# --- INVENTORY ---
 elif menu == "📦 INVENTORY":
     st.title("📦 Inventory")
     df_p = load_data("Parts")
