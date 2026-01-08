@@ -15,14 +15,14 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-import qrcode # Pastikan library ini ada dalam requirements.txt
+import qrcode 
 
 # =============================================================================
 # 1. CONFIGURATION & SETUP
 # =============================================================================
 st.set_page_config(page_title="DCK Tech System", layout="wide")
 
-# Cloudinary Config (Untuk simpan gambar)
+# Cloudinary Config
 cloudinary.config( 
   cloud_name = "dmnk9vbyj", 
   api_key = "382361922884785", 
@@ -30,7 +30,7 @@ cloudinary.config(
   secure = True
 )
 
-# Google Sheet ID (Database Utama)
+# Google Sheet ID
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
 # --- SESSION STATE INITIALIZATION ---
@@ -44,7 +44,6 @@ if 'email_pass' not in st.session_state:
     st.session_state.email_pass = ""
 if 'pos_cart' not in st.session_state:
     st.session_state.pos_cart = []
-# V74: New Session State untuk Restock Cart
 if 'restock_cart' not in st.session_state:
     st.session_state.restock_cart = []
 
@@ -62,10 +61,9 @@ if 'config' not in st.session_state:
     }
 
 # =============================================================================
-# 2. HELPER FUNCTIONS (Alat Bantuan)
+# 2. HELPER FUNCTIONS
 # =============================================================================
 def safe_float(val):
-    """Tukar duit 'RM 50.00' jadi nombor 50.0"""
     try:
         if pd.isna(val) or str(val).strip() == "":
             return 0.0
@@ -75,14 +73,12 @@ def safe_float(val):
         return 0.0
 
 def safe_int(val):
-    """Tukar teks jadi nombor bulat"""
     try:
         return int(float(val))
     except:
         return 0
 
 def robust_api_call(func, *args, **kwargs):
-    """Kalau Google Sheet jam, cuba 3 kali sebelum error"""
     for i in range(3):
         try:
             return func(*args, **kwargs)
@@ -92,7 +88,6 @@ def robust_api_call(func, *args, **kwargs):
     return None
 
 def clean_phone_number_my(phone_input):
-    """Format nombor telefon Malaysia untuk WhatsApp"""
     p = str(phone_input).replace("-", "").replace(" ", "").replace("+", "").strip()
     if p.startswith("0"):
         return "6" + p
@@ -104,7 +99,7 @@ def clean_phone_number_my(phone_input):
         return "6" + p
 
 # =============================================================================
-# 3. DATABASE ENGINE (Google Sheets)
+# 3. DATABASE ENGINE
 # =============================================================================
 @st.cache_resource
 def get_client():
@@ -113,14 +108,13 @@ def get_client():
     return gspread.authorize(creds)
 
 def init_db():
-    """Cek database, kalau tak ada tab, buat baru"""
     if 'db_checked' in st.session_state:
         return
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
         
-        # 1. Tickets (Rekod Servis)
+        # 1. Tickets
         try:
             ws = sh.worksheet("Tickets")
         except:
@@ -129,7 +123,7 @@ def init_db():
         if len(ws.row_values(1)) != len(h_t):
             ws.update("A1:P1", [h_t])
         
-        # 2. Parts (Used Log - Barang Keluar untuk Repair)
+        # 2. Parts
         try:
             ws_p = sh.worksheet("Parts")
         except:
@@ -138,16 +132,16 @@ def init_db():
         if ws_p.row_values(1) != h_p:
             ws_p.update("A1:H1", [h_p])
         
-        # 3. Sales (Rekod Jualan Kaunter - V73 Added Warranty Column)
+        # 3. Sales
         try:
             ws_s = sh.worksheet("Sales")
         except:
             ws_s = sh.add_worksheet("Sales", 1000, 10)
         h_s = ["ID", "Tarikh", "Item", "Qty", "Harga_Unit", "Total", "Customer", "PaymentMethod", "Warranty"]
-        if len(ws_s.row_values(1)) != len(h_s):
+        if ws_s.row_values(1) != h_s:
             ws_s.update("A1:I1", [h_s])
         
-        # 4. Config (Tetapan)
+        # 4. Config
         try:
             ws_c = sh.worksheet("Config")
         except: 
@@ -155,7 +149,7 @@ def init_db():
             ws_c.append_row(["Key", "Value"])
             ws_c.append_row(["Company_Name", "DCK TECH"])
             
-        # 5. Master Inventory (Gudang Utama - V72/V74 Simplified)
+        # 5. Master Inventory
         try:
             ws_m = sh.worksheet("Master_Inventory")
         except:
@@ -164,7 +158,7 @@ def init_db():
         if len(ws_m.row_values(1)) != len(h_m):
             ws_m.update("A1:F1", [h_m])
 
-        # 6. Restock Log (Rekod Beli Barang - V72/V74 Simplified)
+        # 6. Restock Log
         try:
             ws_r = sh.worksheet("Restock_Log")
         except:
@@ -185,7 +179,6 @@ def load_data(tab_name):
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
-        # Patch Empty Dataframes to avoid errors
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -195,6 +188,8 @@ def load_data(tab_name):
                  df = pd.DataFrame(columns=["ID", "Tarikh", "Item", "Qty", "Harga_Unit", "Total", "Customer", "PaymentMethod", "Warranty"])
             elif tab_name == "Master_Inventory":
                  df = pd.DataFrame(columns=["ItemCode", "ItemName", "CostPrice", "SellPrice", "CurrentStock", "LastUpdated"])
+            elif tab_name == "Restock_Log":
+                 df = pd.DataFrame(columns=["LogID", "Date", "InvoiceNo", "Supplier", "ItemName", "QtyAdded", "CostPrice", "TotalCost"])
 
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
@@ -247,15 +242,15 @@ def delete_row_data(tab_name, id_val):
         return True
     return False
 
-# --- V72: INVENTORY LOGIC (Update Stock) ---
+# --- INVENTORY LOGIC ---
 def update_stock(item_code, qty_change):
-    # qty_change: Positif tambah stok, Negatif tolak stok
+    # qty_change: Positif tambah, Negatif tolak
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
         cell = sheet.find(str(item_code))
         if cell:
-            curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock in V74
+            curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock
             new_qty = curr + int(qty_change)
             sheet.update_cell(cell.row, 5, new_qty)
             st.cache_data.clear()
@@ -265,19 +260,16 @@ def update_stock(item_code, qty_change):
     return False
 
 def check_and_update_master(code, name, cost, sell, qty):
-    # This function handles "If exists, update qty. If new, create row."
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
         cell = sheet.find(str(code))
         if cell:
-            # Update existing
             curr_qty = safe_int(sheet.cell(cell.row, 5).value)
             sheet.update_cell(cell.row, 5, curr_qty + int(qty)) # Update Stock
-            sheet.update_cell(cell.row, 3, cost) # Update latest cost
-            sheet.update_cell(cell.row, 4, sell) # Update latest sell price
+            sheet.update_cell(cell.row, 3, cost) # Update Cost
+            sheet.update_cell(cell.row, 4, sell) # Update Sell
         else:
-            # Create new
             tgl = datetime.now().strftime("%Y-%m-%d")
             sheet.append_row([code, name, cost, sell, qty, tgl])
         st.cache_data.clear()
@@ -416,7 +408,6 @@ def generate_pdf(t, type="SERVICE"):
         for itm in items:
             p.drawString(350, y, str(itm.get('Qty', 1)))
             p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
-            # Papar Warranty di Resit
             desc_text = f"{str(itm.get('Item', '-'))} (W: {itm.get('Warranty','-')})"
             y_item = draw_wrapped_text(p, desc_text, 50, y, 280)
             y = y_item - 10
@@ -515,13 +506,12 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
         return False, str(e)
 
 # =============================================================================
-# 🚦 V70 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
+# 🚦 GATEKEEPER LOGIC: DIGITAL HEALTH CARD
 # =============================================================================
 query_params = st.query_params 
 sn_query = query_params.get("sn", None)
 
 if sn_query:
-    # --- MOD PUBLIC (DIGITAL HEALTH CARD) ---
     st.markdown("""
     <style>
         [data-testid="stSidebar"] {display: none;}
@@ -533,7 +523,6 @@ if sn_query:
     load_config()
     cfg = st.session_state.config
     
-    # Header: Digital Profile
     c_logo, c_title = st.columns([1, 4])
     with c_title:
         st.title(f"💻 {cfg.get('Company_Name', 'DCK TECH')} - Digital Profile")
@@ -545,27 +534,21 @@ if sn_query:
         
     found = False
     if not df.empty:
-        # --- FIX: ROBUST S/N MATCHING ---
         history = df[df['SN'].astype(str).str.strip().str.upper() == str(sn_query).strip().upper()]
         
         if not history.empty:
             found = True
             latest = history.iloc[-1]
             
-            # --- 1. DEVICE IDENTITY CARD (No Status) ---
             with st.container(border=True):
                 c1, c2 = st.columns(2)
                 c1.write(f"**Model:** {latest.get('Model')}")
                 c2.write(f"**S/N:** {latest.get('SN')}")
             
-            # --- 2. UNIFIED HISTORY TIMELINE (ALL RECORDS) ---
             st.write("### 📜 Sejarah Pembaikan")
             
-            # Loop through ALL records (Newest first)
             for _, row in history.iloc[::-1].iterrows():
-                # Clean Timeline UI: Date - Problem
                 with st.expander(f"📅 {row['Tarikh']} : {row['Masalah']}"):
-                    # Green Solution Box
                     st.markdown(f"""
                     <div style="background-color: #d4edda; padding: 10px; border-radius: 5px; border: 1px solid #c3e6cb; color: #155724;">
                         <strong>✅ Solution / Tindakan:</strong><br>
@@ -591,7 +574,9 @@ PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🛒 JUALAN KEDAI", "🔧 UPDAT
 try: idx = PAGES.index(st.session_state.page)
 except: idx = 0
 sel = st.sidebar.radio("NAVIGASI", PAGES, index=idx)
-if sel != st.session_state.page: st.session_state.page = sel; st.rerun()
+if sel != st.session_state.page:
+    st.session_state.page = sel
+    st.rerun()
 
 # === PAGE: DASHBOARD ===
 if st.session_state.page == "📊 DASHBOARD":
@@ -618,7 +603,8 @@ if st.session_state.page == "📊 DASHBOARD":
     search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
     st.write("### Senarai Job Terkini")
     if not df.empty:
-        if search: df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+        if search:
+            df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
         for _, row in df.iloc[::-1].head(10).iterrows():
             with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
                 st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
@@ -633,7 +619,6 @@ if st.session_state.page == "📊 DASHBOARD":
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     
-    # V69: Read options from Config (Dynamic Checkbox)
     opt_mslh = [x.strip() for x in st.session_state.config.get("Options_Masalah", "Slow, Screen, Battery").split(",")]
     opt_fiz = [x.strip() for x in st.session_state.config.get("Options_Fizikal", "Calar, Pecah").split(",")]
     opt_acc = [x.strip() for x in st.session_state.config.get("Options_Aksesori", "Bag, Charger").split(",")]
@@ -695,7 +680,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 else:
                     st.error(m)
 
-# === PAGE: JUALAN KEDAI (V74 - SIMPLE & BULK) ===
+# === PAGE: JUALAN KEDAI ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     df_m = load_data("Master_Inventory")
@@ -884,7 +869,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
         with c_r:
             df_p = load_data("Parts")
-            # --- FIX: CHECK IF DATAFRAME HAS DATA & COLUMNS BEFORE FILTERING ---
             if not df_p.empty and 'TicketID' in df_p.columns:
                  parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             else:
@@ -944,7 +928,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                         else:
                             st.warning("Pilih part dulu.")
 
-# === PAGE: PENGURUSAN STOK (V74: BAKUL RESTOCK SIMPLE) ===
+# === PAGE: PENGURUSAN STOK ===
 elif st.session_state.page == "📦 PENGURUSAN STOK":
     st.title("📦 Pengurusan Stok (Inventory)")
     t_restock, t_master, t_log = st.tabs(["📥 Masuk Stok (Restock)", "📋 Master List", "📜 Log Pembelian"])
@@ -958,13 +942,11 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
         st.markdown("---")
         st.subheader("2. Isi Barang & Tambah ke List")
         
-        # Helper: Existing Items for Autocomplete
         df_m = load_data("Master_Inventory")
         existing_items = df_m['ItemName'].tolist() if not df_m.empty else []
         
         with st.form("add_to_list_form", clear_on_submit=True):
             c_name, c_qty = st.columns([3, 1])
-            # Pilihan: Taip Baru atau Pilih Lama
             item_input = c_name.text_input("Nama Barang (Taip baru atau copy nama lama)")
             if not item_input and existing_items:
                 c_name.caption(f"Contoh barang sedia ada: {', '.join(existing_items[:3])}...")
