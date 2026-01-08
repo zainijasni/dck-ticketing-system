@@ -29,7 +29,21 @@ LIST_MASALAH = ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada 
 LIST_FIZIKAL = ["Calar Biasa", "Calar Teruk", "Skru Hilang", "Case Pecah", "I/O Port Rosak", "Sempurna"]
 LIST_AKSESORI = ["Beg", "Charger", "Mouse", "Tiada"]
 
-# --- 2. DATABASE ENGINE ---
+# --- 2. HELPER FUNCTION (SAFETY FIRST) ---
+def safe_float(val):
+    """
+    Fungsi Penyelamat: Tukar apa saja jadi nombor (0.0) kalau error.
+    Elak sistem crash kalau ada 'RM', koma, atau kosong.
+    """
+    try:
+        if pd.isna(val) or val == "": return 0.0
+        # Buang RM, tukar koma jadi titik
+        clean_val = str(val).upper().replace("RM", "").replace(",", ".").strip()
+        return float(clean_val)
+    except:
+        return 0.0
+
+# --- 3. DATABASE ENGINE ---
 @st.cache_resource
 def get_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -78,12 +92,10 @@ def add_row(tab_name, row):
     st.cache_data.clear()
 
 def update_part_data(part_id, new_name, new_supp, new_price):
-    """Fungsi Edit Part"""
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Parts")
     cell = robust_api_call(sheet.find, str(part_id))
     if cell:
-        # Col 3=Nama, 4=Supp, 8=Harga
         robust_api_call(sheet.update_cell, cell.row, 3, new_name)
         robust_api_call(sheet.update_cell, cell.row, 4, new_supp)
         robust_api_call(sheet.update_cell, cell.row, 8, new_price)
@@ -101,7 +113,7 @@ def delete_part(part_id):
         return True
     return False
 
-# --- 3. PDF GENERATOR (PASSWORD REMOVED) ---
+# --- 4. PDF GENERATOR ---
 def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
@@ -119,8 +131,7 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(50, h-130, f"Model: {t.get('Model', '-')}")
     p.drawString(300, h-130, f"S/N: {t.get('SN', '-')}")
     
-    # --- PASSWORD DIHILANGKAN DARI PDF ---
-    # (Kod password display dah dibuang dari sini atas permintaan Boss)
+    # PASSWORD REMOVED IN PDF
     
     y = h-160
     p.line(50, y+10, w-50, y+10)
@@ -132,7 +143,8 @@ def generate_pdf(t, type="SERVICE"):
     
     if type == "INVOICE":
         p.setFont("Helvetica-Bold", 14)
-        p.drawString(50, y, f"TOTAL: RM {float(t.get('Harga_Jual', 0)):.2f}"); y-=30
+        # Guna safe_float kat sini juga
+        p.drawString(50, y, f"TOTAL: RM {safe_float(t.get('Harga_Jual', 0)):.2f}"); y-=30
     
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "TERMA & SYARAT:"); y-=15
     tc = ["1. Data hilang bukan tanggungjawab kedai.", "2. Barang tak tuntut > 3 bulan jadi hak milik kedai.", "3. Warranty sparepart sahaja."]
@@ -144,7 +156,7 @@ def generate_pdf(t, type="SERVICE"):
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 4. NAVIGATION ---
+# --- 5. NAVIGATION ---
 NAV_OPTIONS = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN"]
 try: nav_index = NAV_OPTIONS.index(st.session_state.page)
 except: nav_index = 0
@@ -212,7 +224,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        # --- RUANGAN INFO PENUH (Detail Job & Password Merah) ---
         with st.expander("ℹ️ MAKLUMAT PENUH TIKET (KLIK SINI)", expanded=True):
             c_info1, c_info2 = st.columns(2)
             c_info1.write(f"**Nama:** {job['Customer']}")
@@ -224,27 +235,31 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
             c_info2.write(f"**Fizikal:** {job['Fizikal']}")
             c_info2.write(f"**Aksesori:** {job['Aksesori']}")
             
-            # Password hanya di sini, warna merah
+            # PASSWORD MERAH DI SINI SAHAJA
             st.error(f"🔐 PASSWORD DEVICE: {job['Password']}")
-            
-            if job['Tech_Note']: st.info(f"📝 Nota Lalu: {job['Tech_Note']}")
+            if job['Tech_Note']: st.info(f"📝 Nota: {job['Tech_Note']}")
 
         c1, c2 = st.columns([1, 2])
         with c1:
             if str(job['Image_Link']).startswith("http"): st.image(job['Image_Link'])
-            st.download_button("Print Tiket", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
+            st.download_button("Print Tiket (Privacy)", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
             
         with c2:
             df_p = load_data("Parts")
             parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
-            total_kos = pd.to_numeric(parts['HargaBeli'], errors='coerce').sum() if not parts.empty else 0
+            
+            # --- AUTO CALC GUNA SAFE_FLOAT ---
+            total_kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
             
             st.markdown(f"### 💰 KOS MODAL: RM {total_kos:.2f}")
             
             with st.form("upd"):
                 stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job['Status']) if job['Status'] in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
                 nt = st.text_area("Update Nota Tech", value=job['Tech_Note'])
-                hj = st.number_input("Harga Jual (Total Bill)", value=float(job['Harga_Jual']))
+                
+                # Gunakan safe_float pada value awal
+                hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job['Harga_Jual']))
+                
                 if st.form_submit_button("UPDATE STATUS & HARGA"):
                     sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
                     cl = robust_api_call(sheet.find, str(pid))
@@ -262,29 +277,28 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         st.divider()
         st.subheader("🔩 Pengurusan Parts")
         
-        # --- TAB EDIT/DELETE/ADD ---
         tab_list, tab_edit, tab_add = st.tabs(["📋 Senarai", "✏️ Edit Part", "➕ Tambah Part"])
         
         with tab_list:
             if not parts.empty: 
                 st.dataframe(parts[['ID', 'NamaPart', 'Supplier', 'HargaBeli']], use_container_width=True)
-                # Butang Delete Pantas
                 del_part = st.selectbox("Pilih Part untuk Hapus:", ["-"] + parts['ID'].tolist())
                 if del_part != "-" and st.button("Hapus Part Ini"):
                      if delete_part(del_part): st.warning("Part Dihapus"); st.rerun()
-            else: st.info("Tiada part direkodkan.")
+            else: st.info("Tiada part.")
             
         with tab_edit:
-            # --- FITUR EDIT PART ---
             if not parts.empty:
                 edit_id = st.selectbox("Pilih ID Part untuk Edit:", parts['ID'].tolist())
-                # Ambil data semasa part tu
                 curr_part = parts[parts['ID'] == edit_id].iloc[0]
                 
                 with st.form("edit_part_form"):
                     e_nama = st.text_input("Nama Part", value=curr_part['NamaPart'])
                     e_supp = st.text_input("Supplier", value=curr_part['Supplier'])
-                    e_harga = st.number_input("Harga Beli (RM)", value=float(curr_part['HargaBeli']))
+                    
+                    # --- INI PUNCA ERROR TADI (DAH DIFIX) ---
+                    e_harga = st.number_input("Harga Beli (RM)", value=safe_float(curr_part['HargaBeli']))
+                    
                     if st.form_submit_button("SIMPAN PERUBAHAN PART"):
                         if update_part_data(edit_id, e_nama, e_supp, e_harga):
                             st.success("Part Updated!"); st.rerun()
@@ -316,13 +330,11 @@ elif st.session_state.page == "📈 LAPORAN":
     st.title("📈 Laporan Prestasi")
     df = load_data("Tickets")
     if not df.empty:
-        df['Harga_Jual'] = pd.to_numeric(df['Harga_Jual'], errors='coerce').fillna(0)
-        df['Kos_Part'] = pd.to_numeric(df['Kos_Part'], errors='coerce').fillna(0)
-        df['Untung'] = df['Harga_Jual'] - df['Kos_Part']
+        # Guna safe_float untuk pengiraan laporan juga
+        total_jual = sum([safe_float(x) for x in df['Harga_Jual']])
+        total_kos = sum([safe_float(x) for x in df['Kos_Part']])
+        untung = total_jual - total_kos
         
         m1, m2 = st.columns(2)
-        m1.metric("Total Sales", f"RM {df['Harga_Jual'].sum():.2f}")
-        m2.metric("Total Untung", f"RM {df['Untung'].sum():.2f}")
-        
-        st.bar_chart(df['Untung'])
-
+        m1.metric("Total Sales", f"RM {total_jual:.2f}")
+        m2.metric("Total Untung", f"RM {untung:.2f}")
