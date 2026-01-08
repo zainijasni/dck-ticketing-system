@@ -52,6 +52,9 @@ if 'pos_cart' not in st.session_state:
 if 'restock_cart' not in st.session_state:
     st.session_state.restock_cart = []
 
+if 'db_ready' not in st.session_state:
+    st.session_state.db_ready = False
+
 if 'config' not in st.session_state:
     st.session_state.config = {
         "Company_Name": "DCK TECH SERVICES",
@@ -89,7 +92,7 @@ def robust_api_call(func, *args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception:
-            time.sleep(1.5)
+            time.sleep(1.5) # Rehat 1.5 saat jika error
             continue
     return None
 
@@ -114,8 +117,12 @@ def get_client():
     return gspread.authorize(creds)
 
 def init_db():
-    if 'db_checked' in st.session_state:
+    """
+    Fungsi ini memastikan semua tab wujud.
+    """
+    if st.session_state.db_ready:
         return
+
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
@@ -173,7 +180,7 @@ def init_db():
         if len(ws_r.row_values(1)) != len(h_r):
             ws_r.update("A1:H1", [h_r])
 
-        # 7. Reference Data (New in V81 for Standardization)
+        # 7. Ref Data (Untuk elak error Gspread API)
         try:
             ws_ref = sh.worksheet("Ref_Data")
         except:
@@ -182,20 +189,26 @@ def init_db():
         if len(ws_ref.row_values(1)) != len(h_ref):
             ws_ref.update("A1:B1", [h_ref])
 
-        st.session_state.db_checked = True
-    except:
+        # Tandakan DB sudah sedia
+        st.session_state.db_ready = True
+
+    except Exception as e:
+        # Jika masih error, kita biarkan dulu supaya app tak crash
         pass
 
+# Panggil Init Sekali Sahaja di sini
+init_db()
+
+# --- DATA LOADING (V80: Optimized Cache) ---
+# Kita buang cache untuk Tickets/Parts supaya real-time, tapi Inventory boleh cache sikit
 def load_data(tab_name):
-    # No Cache here to solve sync issues and ensure live data
-    init_db()
     client = get_client()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
-        # Patch Empty
+        # Patch Empty DataFrame
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -210,11 +223,13 @@ def load_data(tab_name):
             elif tab_name == "Ref_Data":
                  df = pd.DataFrame(columns=["Type", "Value"])
 
+        # Patch Missing Columns if any
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
+            
         return df
     except:
-        return pd.DataFrame()
+        return pd.DataFrame() # Return empty DF if fail
 
 def load_config():
     try:
@@ -236,7 +251,16 @@ def save_config_to_db(new_config):
 
 def add_row(tab_name, row):
     client = get_client()
-    sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+    # V82 FIX: Auto-Create Worksheet if Missing (Fixes APIError)
+    try:
+        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+    except:
+        # Jika sheet tak wujud, buat baru on-the-fly
+        sheet = client.open_by_key(SHEET_ID).add_worksheet(title=tab_name, rows=1000, cols=20)
+        # Tambah header asas jika perlu (optional, tapi safety measure)
+        if tab_name == "Ref_Data":
+            sheet.append_row(["Type", "Value"])
+            
     robust_api_call(sheet.append_row, row)
 
 def update_cell_data(tab_name, id_val, col_dict):
@@ -260,12 +284,13 @@ def delete_row_data(tab_name, id_val):
 
 # --- INVENTORY LOGIC ---
 def update_stock(item_code, qty_change):
+    # qty_change: Positif tambah, Negatif tolak
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
         cell = sheet.find(str(item_code))
         if cell:
-            curr = safe_int(sheet.cell(cell.row, 5).value)
+            curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock
             new_qty = curr + int(qty_change)
             sheet.update_cell(cell.row, 5, new_qty)
             return True
@@ -277,25 +302,16 @@ def check_and_update_master(code, name, cost, sell, qty, supplier):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
-        # Cari berdasarkan NAMA BARANG untuk standardize
-        # Jika nama sama, kita anggap barang sama (walaupun code lain, kita update stock row yg wujud)
-        
-        # Cari row berdasarkan kod dulu (paling tepat)
         cell = sheet.find(str(code))
-        
-        # Kalau kod tak jumpa, cari based on nama (exact match) untuk merge
-        if not cell:
-            cell = sheet.find(str(name))
-            
         if cell:
-            # Barang dah ada, kita UPDATE kuantiti
+            # Update existing
             curr_qty = safe_int(sheet.cell(cell.row, 5).value)
             sheet.update_cell(cell.row, 5, curr_qty + int(qty)) # Update Stock
-            sheet.update_cell(cell.row, 3, cost) # Update Cost (Latest)
-            sheet.update_cell(cell.row, 4, sell) # Update Sell (Latest)
+            sheet.update_cell(cell.row, 3, cost) # Update Cost
+            sheet.update_cell(cell.row, 4, sell) # Update Sell
             sheet.update_cell(cell.row, 6, supplier) # Update Supplier
         else:
-            # Barang baru, kita create
+            # Create new
             tgl = datetime.now().strftime("%Y-%m-%d")
             sheet.append_row([code, name, cost, sell, qty, supplier, tgl])
         return True
@@ -529,7 +545,7 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
         return False, str(e)
 
 # =============================================================================
-# 🚦 V70 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
+# 🚦 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
 # =============================================================================
 query_params = st.query_params 
 sn_query = query_params.get("sn", None)
@@ -546,7 +562,6 @@ if sn_query:
     load_config()
     cfg = st.session_state.config
     
-    # Header: Digital Profile
     c_logo, c_title = st.columns([1, 4])
     with c_title:
         st.title(f"💻 {cfg.get('Company_Name', 'DCK TECH')} - Digital Profile")
@@ -704,7 +719,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 else:
                     st.error(m)
 
-# === PAGE: JUALAN KEDAI (V74 - SIMPLE & BULK) ===
+# === PAGE: JUALAN KEDAI ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     df_m = load_data("Master_Inventory")
@@ -809,72 +824,14 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
     if not df.empty:
         ids = df['ID'].astype(str).tolist()
         tgt = str(st.session_state.selected_id) if st.session_state.selected_id else ids[-1]
-        
-        # UI Selection
         pid = st.selectbox("Pilih Job:", ids, index=ids.index(tgt) if tgt in ids else 0)
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        # Status Selection (Outside Form for Instant Reactivity)
-        st.write("---")
-        st.subheader("Status & Tindakan")
-        
-        # Dapatkan status semasa
-        current_status = job.get('Status', 'Pending')
-        status_options = ["Pending", "Checking", "Waiting Part", "Done", "Collected"]
-        
-        # Ensure current status is valid
-        if current_status not in status_options:
-            index_status = 0
-        else:
-            index_status = status_options.index(current_status)
+        # --- V82: RESTORED CUSTOMER INFO UI ---
+        with st.expander("ℹ️ MAKLUMAT CUSTOMER (Klik Untuk Edit)", expanded=True):
+            edit_mode = st.checkbox("✏️ Tick Untuk Edit Info")
             
-        # Selectbox outside form triggers rerun immediately
-        selected_status = st.selectbox("Update Status:", status_options, index=index_status)
-        
-        with st.form("upd_status"):
-            
-            # Logic: Show Warranty Radio only if Status is Done/Collected
-            w_choice = "Tiada"
-            if selected_status in ["Done", "Collected"]:
-                st.info("✅ Job Siap/Diambil. Sila pilih Warranty:")
-                w_choice = st.radio("Tempoh Warranty:", ["Tiada", "1 Bulan", "3 Bulan"], horizontal=True)
-            
-            # Logic: Pre-fill Tech Note
-            new_note = job.get('Tech_Note','')
-            
-            nt = st.text_area("Solution / Tech Note", value=new_note)
-            hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
-            
-            if st.form_submit_button("💾 UPDATE STATUS & WARRANTY"):
-                # Append warranty to note if selected
-                final_note = nt
-                if w_choice != "Tiada" and "Warranty:" not in final_note:
-                    final_note += f"\n[Warranty: {w_choice}]"
-                
-                sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
-                cl = robust_api_call(sheet.find, str(pid))
-                
-                if cl:
-                    # Column 12: Status, 14: Harga Jual, 16: Tech Note
-                    robust_api_call(sheet.update_cell, cl.row, 12, selected_status)
-                    robust_api_call(sheet.update_cell, cl.row, 14, hj)
-                    robust_api_call(sheet.update_cell, cl.row, 16, final_note)
-                    st.cache_data.clear()
-                    st.toast("Status & Warranty Dikemaskini!", icon='🎉')
-                    time.sleep(1)
-                    st.rerun()
-
-        # Print Receipt Button (Outside Form)
-        if selected_status in ["Done", "Collected"]:
-            st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
-
-        st.divider()
-        
-        # TABS FOR INFO & PARTS
-        tab_info, tab_parts, tab_qr = st.tabs(["ℹ️ Info & Edit", "🔩 Parts & Stok", "🖨️ QR Sticker"])
-        
-        with tab_info:
-            with st.expander("Klik untuk Edit Info Customer", expanded=True):
+            if edit_mode:
                 with st.form("edit_cust_form"):
                     ec_nama = st.text_input("Nama", value=job.get('Customer',''))
                     c_ec1, c_ec2 = st.columns(2)
@@ -885,79 +842,140 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     ec_sn = c_ec4.text_input("Serial No", value=job.get('SN',''))
                     ec_pwd = c_ec5.text_input("Password", value=job.get('Password',''))
                     ec_mslh = st.text_area("Masalah", value=job.get('Masalah',''))
-                    if st.form_submit_button("Simpan Perubahan"):
+                    if st.form_submit_button("💾 SIMPAN PERUBAHAN"):
                         if update_customer_info_db(pid, ec_nama, ec_phone, ec_email, ec_model, ec_sn, ec_pwd, ec_mslh):
                             st.toast("Info Berjaya Diubah!", icon='✅')
                             time.sleep(1)
                             st.rerun()
-            
-            st.markdown("---")
-            wa_url = generate_links("WA", job)
-            st.link_button("📱 WhatsApp Status ke Customer", wa_url, use_container_width=True)
+            else:
+                c1, c2 = st.columns(2)
+                c1.write(f"**Nama:** {job.get('Customer','-')}")
+                c1.write(f"**Model:** {job.get('Model','-')}")
+                c1.write(f"**Phone:** {job.get('Phone','-')}")
+                c1.write(f"**S/N:** {job.get('SN','-')}")
+                c2.write(f"**Masalah:** {job.get('Masalah','-')}")
+                c2.error(f"🔐 PWD: {job.get('Password','-')}")
 
-        with tab_parts:
+        st.divider()
+        
+        # --- V82: SPLIT VIEW (LEFT: STATUS & PARTS, RIGHT: QR) ---
+        c_left, c_right = st.columns([2, 1])
+        
+        with c_left:
+            st.subheader("🔧 Status & Parts")
+            
+            # --- STATUS & WARRANTY SECTION (MOVED DOWN) ---
+            with st.container(border=True):
+                # Dapatkan status semasa
+                current_status = job.get('Status', 'Pending')
+                status_options = ["Pending", "Checking", "Waiting Part", "Done", "Collected"]
+                
+                if current_status not in status_options:
+                    index_status = 0
+                else:
+                    index_status = status_options.index(current_status)
+                    
+                selected_status = st.selectbox("Update Status:", status_options, index=index_status)
+                
+                with st.form("upd_status_form"):
+                    
+                    # Warranty Logic
+                    w_choice = "Tiada"
+                    if selected_status in ["Done", "Collected"]:
+                        st.info("✅ Sila pilih tempoh warranty:")
+                        w_choice = st.radio("Warranty:", ["Tiada", "1 Bulan", "3 Bulan"], horizontal=True)
+                    
+                    new_note = job.get('Tech_Note','')
+                    nt = st.text_area("Solution / Tech Note", value=new_note)
+                    hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
+                    
+                    if st.form_submit_button("💾 UPDATE STATUS"):
+                        final_note = nt
+                        if w_choice != "Tiada" and "Warranty:" not in final_note:
+                            final_note += f"\n[Warranty: {w_choice}]"
+                        
+                        sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
+                        cl = robust_api_call(sheet.find, str(pid))
+                        
+                        # Calculate current part cost
+                        df_p_curr = load_data("Parts")
+                        parts_curr = df_p_curr[df_p_curr['TicketID'].astype(str) == str(pid)] if not df_p_curr.empty else pd.DataFrame()
+                        kos_curr = sum([safe_float(x) for x in parts_curr['HargaBeli'].tolist()]) if not parts_curr.empty else 0
+
+                        if cl:
+                            robust_api_call(sheet.update_cell, cl.row, 12, selected_status)
+                            robust_api_call(sheet.update_cell, cl.row, 13, kos_curr)
+                            robust_api_call(sheet.update_cell, cl.row, 14, hj)
+                            robust_api_call(sheet.update_cell, cl.row, 16, final_note)
+                            st.cache_data.clear()
+                            st.toast("Status Dikemaskini!", icon='🎉')
+                            time.sleep(1)
+                            st.rerun()
+
+                if selected_status in ["Done", "Collected"]:
+                    st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+
+            # --- PARTS SECTION ---
+            st.write("### 🔩 Parts Digunakan")
             df_p = load_data("Parts")
             if not df_p.empty and 'TicketID' in df_p.columns:
                  parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             else:
                  parts = pd.DataFrame()
             
-            kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
-            st.write(f"**Total Kos Part:** RM {kos:.2f}")
-            
             if not parts.empty:
                 st.dataframe(parts[['NamaPart', 'HargaBeli']], use_container_width=True)
-                # Delete Part logic
-                d = st.selectbox("Pilih ID Part untuk padam:", ["-"] + parts['ID'].tolist())
-                if d != "-" and st.button("Padam Part"):
-                    delete_part(d)
+                d_part = st.selectbox("Hapus Part (ID):", ["-"] + parts['ID'].tolist())
+                if d_part != "-" and st.button("Padam Part"):
+                    delete_part(d_part)
                     st.toast("Part dipadam!", icon='🗑️')
                     time.sleep(1)
                     st.rerun()
             else:
-                st.info("Tiada part direkodkan.")
+                st.caption("Tiada part direkodkan.")
             
-            st.markdown("---")
-            st.write("### ➕ Guna Part Dari Stok")
-            with st.form("use_part_form", clear_on_submit=True):
-                sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
-                
-                if st.form_submit_button("Guna Part Ini"):
-                    if sel_part != "-":
-                        item_data = stock_options[sel_part]
-                        supplier = item_data.get('Supplier', 'Internal Stock')
-                        # Add to Parts Log (Warranty set to - as it follows Job Warranty)
-                        add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "-", "-", item_data['CostPrice']])
-                        # Deduct Stock
-                        update_stock(item_data['ItemCode'], -1)
-                        st.toast(f"{item_data['ItemName']} ditambah!", icon='✅')
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.warning("Pilih part dulu.")
+            with st.expander("➕ Tambah Part Dari Stok"):
+                with st.form("use_part_form", clear_on_submit=True):
+                    sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
+                    if st.form_submit_button("Guna Part Ini"):
+                        if sel_part != "-":
+                            item_data = stock_options[sel_part]
+                            supplier = item_data.get('Supplier', 'Internal')
+                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "-", "-", item_data['CostPrice']])
+                            update_stock(item_data['ItemCode'], -1)
+                            st.toast(f"{item_data['ItemName']} ditambah!", icon='✅')
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.warning("Pilih part dulu.")
 
-        with tab_qr:
-            st.info("Tampal ini di bawah laptop customer.")
-            my_url = "https://dck-ticketing-system-r7vonv3ctwvxzfh2yqn4s5.streamlit.app"
-            app_url = st.text_input("Link Sistem (Auto-Set)", value=my_url)
-            
-            if app_url and job.get('SN'):
-                if app_url.endswith("/"): app_url = app_url[:-1]
-                qr_data = f"{app_url}/?sn={job.get('SN')}"
-                qr = qrcode.QRCode(box_size=10, border=2)
-                qr.add_data(qr_data)
-                qr.make(fit=True)
-                img_qr = qr.make_image(fill_color="black", back_color="white")
-                buffer = BytesIO()
-                img_qr.save(buffer, format="PNG")
-                img_bytes = buffer.getvalue()
+        with c_right:
+            st.subheader("🖨️ QR & Komunikasi")
+            with st.container(border=True):
+                st.info("Sticker Health Card")
+                my_url = "https://dck-ticketing-system-r7vonv3ctwvxzfh2yqn4s5.streamlit.app"
+                if job.get('SN'):
+                    qr_data = f"{my_url}/?sn={job.get('SN')}"
+                    qr = qrcode.QRCode(box_size=10, border=2)
+                    qr.add_data(qr_data)
+                    qr.make(fit=True)
+                    img_qr = qr.make_image(fill_color="black", back_color="white")
+                    buffer = BytesIO()
+                    img_qr.save(buffer, format="PNG")
+                    st.image(buffer.getvalue(), caption=f"S/N: {job.get('SN')}", use_container_width=True)
                 
-                c_qr1, c_qr2 = st.columns([1, 2])
-                c_qr1.image(img_bytes, caption=f"S/N: {job.get('SN')}", width=150)
-                c_qr2.write(f"**URL:** {qr_data}")
-                c_qr2.info("👉 Right-click gambar QR > 'Save Image' untuk print.")
+                st.markdown("---")
+                wa_url = generate_links("WA", job)
+                st.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
+                
+                if job.get('Email'):
+                    if st.button("📧 Email PDF"):
+                        doc = "INVOICE" if job.get('Status') in ['Done', 'Collected'] else "SERVICE"
+                        ok, m = send_email_with_pdf(job.get('Email'), job, generate_pdf(job, doc), "Status.pdf")
+                        if ok: st.toast(m, icon='✅')
+                        else: st.error(m)
 
-# === PAGE: PENGURUSAN STOK (V74: BAKUL RESTOCK SIMPLE) ===
+# === PAGE: PENGURUSAN STOK ===
 elif st.session_state.page == "📦 PENGURUSAN STOK":
     st.title("📦 Pengurusan Stok (Inventory)")
     t_restock, t_master, t_log = st.tabs(["📥 Masuk Stok (Restock)", "📋 Master List", "📜 Log Pembelian"])
@@ -966,26 +984,31 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
         st.subheader("1. Maklumat Invoice")
         c1, c2 = st.columns(2)
         inv_no = c1.text_input("No Invoice / Resit Supplier")
-        supp = st.selectbox("Nama Supplier (Dari Master Data)", ["-"] + [x for x in load_data("Ref_Data")[load_data("Ref_Data")['Type']=='Supplier']['Value'].tolist()] + ["Lain-lain"])
-        if supp == "Lain-lain":
-            supp = st.text_input("Masukkan Nama Supplier Baru")
+        
+        # Supplier Selection Logic
+        ref_df = load_data("Ref_Data")
+        std_supp = ref_df[ref_df['Type'] == 'Supplier']['Value'].tolist() if not ref_df.empty else []
+        
+        supp_choice = c2.selectbox("Nama Supplier", ["-"] + std_supp + ["Lain-lain..."])
+        if supp_choice == "Lain-lain...":
+            supp = st.text_input("Taip Nama Supplier Baru")
+        elif supp_choice != "-":
+            supp = supp_choice
+        else:
+            supp = ""
         
         st.markdown("---")
         st.subheader("2. Isi Barang & Tambah ke List")
         
-        # V81: Helper for Standard Part Names
-        ref_df = load_data("Ref_Data")
         std_parts = ref_df[ref_df['Type'] == 'Part']['Value'].tolist() if not ref_df.empty else []
         
         with st.form("add_to_list_form", clear_on_submit=True):
             c_name, c_qty = st.columns([3, 1])
-            
-            # Selectbox for Standard Name
             part_choice = c_name.selectbox("Pilih Nama Part (Standard)", ["-"] + std_parts + ["Taip Baru..."])
             
             item_input = ""
             if part_choice == "Taip Baru...":
-                item_input = c_name.text_input("Taip Nama Barang Baru (Jika tiada dalam list)")
+                item_input = c_name.text_input("Taip Nama Barang Baru")
             elif part_choice != "-":
                 item_input = part_choice
             
@@ -1008,11 +1031,9 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                 else:
                     st.warning("Nama barang & Harga Kos wajib isi.")
 
-        # DISPLAY LIST
         if st.session_state.restock_cart:
             st.divider()
             st.subheader("3. Semak & Simpan")
-            
             cart_df = pd.DataFrame(st.session_state.restock_cart)
             st.dataframe(cart_df, use_container_width=True)
             
@@ -1030,20 +1051,14 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     my_bar = st.progress(0, text=progress_text)
                     
                     for i, item in enumerate(st.session_state.restock_cart):
-                        
-                        # V79: Anti-Jamming Sleep
                         if i > 0 and i % 5 == 0:
                             time.sleep(1.5)
                         
-                        # Logic Merge Stock (Based on Name)
                         check_and_update_master(f"ITM-{int(time.time())}-{i}", item['ItemName'], item['Cost'], item['Sell'], item['Qty'], supp)
-                        
-                        # Log
                         add_row("Restock_Log", [log_id, tgl, inv_no, supp, item['ItemName'], item['Qty'], item['Cost'], item['Total']])
-                        
                         my_bar.progress((i + 1) / len(st.session_state.restock_cart), text=f"Menyimpan {item['ItemName']}...")
                     
-                    st.session_state.restock_cart = [] # Clear cart
+                    st.session_state.restock_cart = []
                     my_bar.empty()
                     st.success("Selesai! Semua stok telah direkodkan.")
                     time.sleep(2)
@@ -1067,7 +1082,7 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
         else:
             st.info("Tiada rekod pembelian.")
 
-# === PAGE: PENGURUSAN DATA (V81 NEW) ===
+# === PAGE: PENGURUSAN DATA ===
 elif st.session_state.page == "🗂️ PENGURUSAN DATA":
     st.title("🗂️ Pengurusan Data Master")
     st.info("Daftarkan nama standard barang & supplier di sini supaya list Inventory cantik & tak berterabur.")
