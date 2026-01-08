@@ -384,9 +384,6 @@ if sn_query:
     found = False
     if not df.empty:
         # --- FIX: ROBUST S/N MATCHING ---
-        # Convert column to String -> Strip Whitespace -> Uppercase
-        # Convert query to String -> Strip Whitespace -> Uppercase
-        # This handles cases where S/N might be read as number (e.g. 123.0)
         history = df[df['SN'].astype(str).str.strip().str.upper() == str(sn_query).strip().upper()]
         
         if not history.empty:
@@ -620,7 +617,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
             st.divider()
             
-            # --- 🖨️ V67.1: QR CODE STICKER (HARDCODED URL) ---
+            # --- 🖨️ V68.2: FIXED QR CODE BUFFER ---
             with st.expander("🖨️ GENERATE QR STICKER (HEALTH CARD)"):
                 st.info("Tampal ini di bawah laptop customer.")
                 
@@ -631,16 +628,22 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     if app_url.endswith("/"): app_url = app_url[:-1]
                     qr_data = f"{app_url}/?sn={job.get('SN')}"
                     
-                    # Create QR
+                    # 1. Create QR Object
                     qr = qrcode.QRCode(box_size=10, border=2)
                     qr.add_data(qr_data)
                     qr.make(fit=True)
                     img_qr = qr.make_image(fill_color="black", back_color="white")
                     
+                    # 2. Convert to BytesIO Buffer (INI YANG KITA FIX)
+                    # Streamlit tak boleh baca QR object terus. Kena save jadi PNG dalam RAM dulu.
+                    buffer = BytesIO()
+                    img_qr.save(buffer, format="PNG")
+                    img_bytes = buffer.getvalue()
+                    
                     c_qr1, c_qr2 = st.columns([1, 2])
                     
-                    # --- FIX CRASH: Just pass img_qr directly (remove .get_image()) ---
-                    c_qr1.image(img_qr, caption=f"S/N: {job.get('SN')}", width=150)
+                    # 3. Pass Bytes to Streamlit
+                    c_qr1.image(img_bytes, caption=f"S/N: {job.get('SN')}", width=150)
                     
                     c_qr2.write(f"**URL:** {qr_data}")
                     c_qr2.info("👉 Right-click gambar QR > 'Save Image' untuk print.")
