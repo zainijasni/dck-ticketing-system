@@ -322,7 +322,7 @@ def generate_message_content(data):
     elif status in ['Done', 'Collected']: msg += "\n✅ Berita Baik! Peranti anda telah SIAP dibaiki."
     else: msg += f"\nStatus terkini peranti anda: {status}"
     
-    msg += f"\n\n--- BUTIRAN ---\nID: {tid}\nModel: {model}\nS/N: {sn}\nMasalah: {masalah}\nNota: {note}"
+    msg += f"\n\n--- BUTIRAN ---\nID: {tid}\nModel: {model}\nS/N: {sn}\nMasalah: {masalah}\nSolution: {note}"
     if status in ['Done', 'Collected']: msg += f"\n\n💰 TOTAL: RM {price:.2f}"
     msg += "\n\nSekian,\nTeam DCK Tech"
     return msg
@@ -361,7 +361,6 @@ sn_query = query_params.get("sn", None)
 
 if sn_query:
     # --- MOD PUBLIC (DIGITAL HEALTH CARD) ---
-    # Ini Bypass Login/Menu Admin. Sesiapa ada link ni boleh tengok.
     st.markdown("""
     <style>
         [data-testid="stSidebar"] {display: none;}
@@ -402,7 +401,15 @@ if sn_query:
                 st.markdown("---")
                 st.write("**Sejarah Isu & Pembaikan:**")
                 st.info(f"{latest.get('Masalah')}")
-                st.write(f"*Nota Tech: {latest.get('Tech_Note', '-')}")
+                
+                # --- CHANGE 3: SOLUTION with GREEN BACKGROUND ---
+                st.markdown(f"""
+                <div style="background-color: #d4edda; padding: 10px; border-radius: 5px; border: 1px solid #c3e6cb; color: #155724; margin-top: 10px;">
+                    <strong>✅ Solution:</strong><br>
+                    {latest.get('Tech_Note', '-')}
+                </div>
+                """, unsafe_allow_html=True)
+                # ------------------------------------------------
 
             if len(history) > 1:
                 with st.expander(f"📜 Lihat Sejarah Servis Terdahulu ({len(history)} rekod)"):
@@ -613,9 +620,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
             with st.expander("🖨️ GENERATE QR STICKER (HEALTH CARD)"):
                 st.info("Tampal ini di bawah laptop customer.")
                 
-                # Boss tak payah isi dah. Saya dah letak link Boss kat sini.
                 my_url = "https://dck-ticketing-system-r7vonv3ctwvxzfh2yqn4s5.streamlit.app"
-                
                 app_url = st.text_input("Link Sistem (Auto-Set)", value=my_url)
                 
                 if app_url and job.get('SN'):
@@ -671,7 +676,11 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 st.write(f"**KOS:** RM {kos:.2f}")
                 with st.form("upd_status"):
                     stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                    nt = st.text_area("Nota Technician", value=job.get('Tech_Note',''))
+                    
+                    # --- CHANGE 2: RENAME LABEL TO SOLUTION ---
+                    nt = st.text_area("Solution", value=job.get('Tech_Note',''))
+                    # ------------------------------------------
+
                     hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
                     if st.form_submit_button("UPDATE"):
                         sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
@@ -743,14 +752,18 @@ elif st.session_state.page == "🔎 HISTORY DEVICE":
             
             if not history.empty:
                 st.success(f"Jumpa {len(history)} rekod untuk S/N: {search_sn}")
-                st.dataframe(history[['Tarikh', 'ID', 'Model', 'Masalah', 'Status', 'Tech_Note']], use_container_width=True)
                 
+                # --- CHANGE 1: ADD 'CUSTOMER' TO TABLE ---
+                st.dataframe(history[['Tarikh', 'ID', 'Customer', 'Model', 'Masalah', 'Status', 'Tech_Note']], use_container_width=True)
+                # -----------------------------------------
+
                 st.write("---")
                 st.write("### 📜 Butiran Terperinci")
                 for _, row in history.iterrows():
                     with st.expander(f"{row['Tarikh']} - {row['Masalah']} ({row['Status']})"):
                         st.write(f"**ID Tiket:** {row['ID']}")
-                        st.write(f"**Technician Note:** {row['Tech_Note']}")
+                        st.write(f"**Customer:** {row['Customer']}") # Extra info
+                        st.write(f"**Solution (Tech Note):** {row['Tech_Note']}")
                         if st.button("Buka Job Ini", key=f"hist_{row['ID']}"):
                             st.session_state.selected_id = row['ID']
                             st.session_state.page = "🔧 UPDATE STATUS"
