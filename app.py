@@ -60,58 +60,68 @@ def clean_phone_number_my(phone_input):
     elif p.startswith("60"): return p
     else: return "6" + p
 
-# --- 3. CORE MESSAGE GENERATOR (TEMPLATE SAMA MACAM PDF) ---
+# --- 3. CORE MESSAGE GENERATOR (ANTI CRASH FIX) ---
 def generate_message_content(data):
     """
-    Fungsi ini menjana teks mesej yang STANDARD untuk WhatsApp, Email Link, dan Email Server.
-    Isinya SEBIJI macam PDF (kecuali Password).
+    Generate teks mesej standard. Guna .get() untuk elak KeyError.
     """
-    # Pastikan data wujud, kalau tak letak "-"
-    d = {k: data.get(k, '-') for k in data}
+    # Ambil data dengan nilai default jika kosong
+    cust_name = str(data.get('Customer', 'Pelanggan'))
+    status = str(data.get('Status', 'Pending'))
+    tid = str(data.get('ID', '-'))
+    model = str(data.get('Model', '-'))
+    sn = str(data.get('SN', '-'))
+    phone = str(data.get('Phone', '-'))
+    email = str(data.get('Email', '-'))
+    masalah = str(data.get('Masalah', '-'))
+    fizikal = str(data.get('Fizikal', '-'))
+    aksesori = str(data.get('Aksesori', '-'))
+    note = str(data.get('Tech_Note', '-'))
+    tarikh = str(data.get('Tarikh', '-'))
+    img_link = str(data.get('Image_Link', ''))
     
     # Format Duit
-    total = f"RM {safe_float(d.get('Harga_Jual', 0)):.2f}"
+    total = f"RM {safe_float(data.get('Harga_Jual', 0)):.2f}"
     
     # Header
-    msg = f"Hai {d['Customer']},\n\nTerima kasih berurusan dengan DCK TECH."
+    msg = f"Hai {cust_name},\n\nTerima kasih berurusan dengan DCK TECH."
     
     # Status Message
-    if d['Status'] == 'Pending':
+    if status == 'Pending':
         msg += "\nKami telah menerima peranti anda untuk pemeriksaan."
-    elif d['Status'] in ['Done', 'Collected']:
+    elif status in ['Done', 'Collected']:
         msg += "\n✅ Berita Baik! Peranti anda telah SIAP dibaiki."
     else:
-        msg += f"\nStatus terkini peranti anda: {d['Status']}"
+        msg += f"\nStatus terkini peranti anda: {status}"
 
-    # BODY (SAMA MACAM PDF)
+    # BODY LENGKAP
     msg += f"""
 
 ----------------------------------------
 BUTIRAN TIKET:
 ----------------------------------------
-🏷️ Tiket ID: {d['ID']}
-📅 Tarikh: {d['Tarikh']}
-💻 Model: {d['Model']}
-🔢 S/N: {d['SN']}
-📞 No HP: {d['Phone']}
-📧 Email: {d['Email']}
+🏷️ Tiket ID: {tid}
+📅 Tarikh: {tarikh}
+💻 Model: {model}
+🔢 S/N: {sn}
+📞 No HP: {phone}
+📧 Email: {email}
 
 ----------------------------------------
 DIAGNOSIS & KONDISI:
 ----------------------------------------
-⚠️ Masalah: {d['Masalah']}
-🛠️ Fizikal: {d['Fizikal']}
-🎒 Aksesori: {d['Aksesori']}
-📝 Nota Tech: {d.get('Tech_Note', '-')}
+⚠️ Masalah: {masalah}
+🛠️ Fizikal: {fizikal}
+🎒 Aksesori: {aksesori}
+📝 Nota Tech: {note}
 """
 
     # Footer (Gambar & Harga)
-    if d['Status'] in ['Done', 'Collected']:
+    if status in ['Done', 'Collected']:
         msg += f"\n💰 TOTAL BILL: {total}"
     
-    # Link Gambar (Jika ada)
-    img_link = str(d.get('Image_Link', ''))
-    if img_link and img_link != "nan" and img_link != "-":
+    # Link Gambar
+    if img_link and img_link != "nan" and img_link != "-" and img_link != "":
         msg += f"\n\n📷 Lihat Gambar Peranti:\n{img_link}"
         
     msg += "\n\nSekian,\nDCK Tech Team"
@@ -119,9 +129,9 @@ DIAGNOSIS & KONDISI:
 
 def generate_links(type, data):
     phone = clean_phone_number_my(data.get('Phone', ''))
-    email = data.get('Email', '')
+    email = str(data.get('Email', ''))
     
-    # Guna Template Standard di atas
+    # Panggil fungsi generate content yang dah dibetulkan
     full_msg = generate_message_content(data)
     
     if type == "WA":
@@ -130,7 +140,7 @@ def generate_links(type, data):
         return f"https://wa.me/{phone}?text={urllib.parse.quote(wa_msg)}"
     
     elif type == "EMAIL":
-        subject = f"Tiket DCK: {data.get('ID')} - {data.get('Model')}"
+        subject = f"Tiket DCK: {data.get('ID', '-')} - {data.get('Model', '-')}"
         return f"mailto:{email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(full_msg)}"
 
 # --- 4. DATABASE ENGINE ---
@@ -230,7 +240,6 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(50, h-130, f"Email: {t.get('Email', '-')}"); p.drawString(300, h-130, f"Model: {t.get('Model', '-')}")
     p.drawString(50, h-145, f"Serial No: {t.get('SN', '-')}")
     
-    # --- PDF CONTENT (SAME AS MESSAGE) ---
     y = h-170
     p.line(50, y+10, w-50, y+10)
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "DETAIL DIAGNOSIS:"); y-=15
@@ -253,7 +262,7 @@ def generate_pdf(t, type="SERVICE"):
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 6. EMAIL SENDER (SMTP) ---
+# --- 6. EMAIL SENDER ---
 def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
     sender = st.session_state.email_user
     password = st.session_state.email_pass
@@ -312,8 +321,8 @@ elif st.session_state.page == "📊 DASHBOARD":
         for _, row in df.iloc[::-1].iterrows():
             with st.expander(f"{row.get('ID', '-')} - {row.get('Customer', '-')} ({row.get('Status', '-')})"):
                 st.write(f"Model: {row.get('Model', '-')} | Masalah: {row.get('Masalah', '-')}")
-                if st.button("🔧 Manage Job", key=f"btn_{row['ID']}"):
-                    st.session_state.selected_id = row['ID']; st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
+                if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
+                    st.session_state.selected_id = row.get('ID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
 
 # === PAGE: DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
@@ -345,15 +354,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                     row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, email, model, sn, pwd, ", ".join(mslh), ", ".join(fiz), ", ".join(acc), "Pending", 0, 0, img_str, note]
                     add_row("Tickets", row)
                     st.toast("Tiket Berjaya Dibuka!", icon='✅')
-                    
-                    # SIMPAN DATA LENGKAP UTK TEMPLATE
-                    st.session_state.last_data = {
-                        "ID": tid, "Customer": nama, "Phone": phone, "Email": email, 
-                        "Model": model, "SN": sn, "Masalah": ", ".join(mslh), 
-                        "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), 
-                        "Tech_Note": note, "Status": "Pending", "Images": img_str, "Image_Link": img_str,
-                        "Tarikh": row[1]
-                    }
+                    st.session_state.last_data = {"ID": tid, "Customer": nama, "Phone": phone, "Email": email, "Model": model, "SN": sn, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tech_Note": note, "Status": "Pending", "Images": img_str, "Image_Link": img_str, "Tarikh": row[1], "Harga_Jual": 0}
                     time.sleep(1); st.rerun()
 
     if 'last_data' in st.session_state:
@@ -406,7 +407,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
             st.divider()
             ca, cb = st.columns(2)
-            # GENERATE LINKS (V50 - DATA LENGKAP)
             wa_url = generate_links("WA", job)
             ca.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
             if job.get('Email'): 
@@ -508,25 +508,19 @@ elif st.session_state.page == "📈 LAPORAN":
         m1, m2 = st.columns(2)
         m1.metric("Total Sales", f"RM {df['Harga_Jual'].sum():.2f}")
         m2.metric("Total Untung", f"RM {df['Untung'].sum():.2f}")
-        
         st.divider()
         c_prob, c_parts = st.columns(2)
-        
-        # CHART MASALAH
         with c_prob:
             st.subheader("🔧 Analisis Masalah")
             if 'Masalah' in df.columns:
                 all_text = ",".join(df['Masalah'].astype(str).tolist())
                 all_items = [x.strip() for x in all_text.split(",") if x.strip() != ""]
                 if all_items: st.bar_chart(pd.Series(all_items).value_counts().head(5))
-                
-        # CHART PARTS (Barang Laju)
         with c_parts:
             st.subheader("🔩 Alat Ganti Laris")
             if not df_p.empty and 'NamaPart' in df_p.columns:
                 st.bar_chart(df_p['NamaPart'].value_counts().head(5))
             else: st.info("Tiada data part.")
-            
         st.divider()
         tab_h, tab_m, tab_b = st.tabs(["📅 Harian", "📆 Mingguan", "🗓️ Bulanan"])
         with tab_h: st.line_chart(df.groupby(df['Tarikh'].dt.date)[['Harga_Jual', 'Untung']].sum().tail(30))
