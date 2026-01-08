@@ -60,59 +60,33 @@ def clean_phone_number_my(phone_input):
     elif p.startswith("60"): return p
     else: return "6" + p
 
-# --- 3. TEMPLATE AYAT LENGKAP (V47 UPDATE) ---
-def generate_links(type, data):
-    """
-    Generate link WhatsApp/Email dengan butiran PENUH (Macam PDF)
-    Tapi TANPA Password.
-    """
-    phone = clean_phone_number_my(data.get('Phone', ''))
-    email = data.get('Email', '')
-    nama = data.get('Customer', 'Pelanggan')
-    
-    # Detail Format (Common for WA & Email)
-    detail_content = f"""
-----------------------------------------
-BUTIRAN PERANTI:
-💻 Model: {data.get('Model', '-')}
-🔢 S/N: {data.get('SN', '-')}
-
-DIAGNOSIS & KONDISI:
-⚠️ Masalah: {data.get('Masalah', '-')}
-🛠️ Fizikal: {data.get('Fizikal', '-')}
-🎒 Aksesori: {data.get('Aksesori', '-')}
-📝 Nota: {data.get('Tech_Note', '-')}
-----------------------------------------
-"""
-    
-    # --- HEADER & FOOTER MENGIKUT STATUS ---
-    status = data.get('Status', 'Pending')
+# --- 3. TEMPLATE & EMAIL ---
+def generate_links(type, phone, email, nama, tid, model, status, images, note=""):
+    valid_phone = clean_phone_number_my(phone)
     
     if status == "Pending":
-        subject = f"Tiket Masuk: {data['ID']} - {data['Model']}"
-        header = f"Hai {nama},\n\nTerima kasih memilih DCK TECH. Kami telah menerima peranti anda. Berikut adalah rekod masuk:"
-        footer = "\nKami akan menghubungi anda semula selepas pemeriksaan lanjut.\n\n📷 Gambar Peranti:\n" + str(data.get('Image_Link', ''))
+        subject = f"Penerimaan Peranti - Tiket: {tid}"
+        header = f"Hai {nama},\n\nKami telah menerima {model} anda untuk pemeriksaan lanjut."
+        body = f"Berikut adalah butiran tiket anda:\n\n🏷️ ID Tiket: {tid}\n💻 Model: {model}\n⚠️ Masalah: {note}\n\n📷 Gambar Peranti Anda:\n{images}\n\nKami akan mengemaskini status selepas diagnosis dibuat.\n\nTerima Kasih,\nDCK Tech Team"
     
     elif status in ["Done", "Collected"]:
-        subject = f"SIAP: {data['Model']} (Tiket: {data['ID']})"
-        header = f"Hai {nama},\n\nBerita Baik! Peranti anda telah SIAP dibaiki."
-        footer = f"\n💰 Jumlah Bayaran: RM {safe_float(data.get('Harga_Jual', 0)):.2f}\n\nSila datang untuk pengambilan. Terima kasih!"
+        subject = f"SIAP: {model} - Tiket: {tid}"
+        header = f"Hai {nama},\n\nBerita baik! Peranti anda ({model}) telah SIAP dibaiki."
+        body = f"🏷️ ID Tiket: {tid}\n✅ Status: {status}\n\nSila rujuk invois rasmi untuk jumlah bayaran.\n\nTerima Kasih kerana memilih DCK Tech!\nDCK Tech Team"
         
-    else: # Checking, Repairing, etc
-        subject = f"Status Update: {data['ID']}"
-        header = f"Hai {nama},\n\nStatus terkini peranti anda: {status.upper()}"
-        footer = "\nKami sedang berusaha menyelesaikannya. Terima kasih kerana bersabar."
+    else:
+        subject = f"Update Status: {tid}"
+        header = f"Hai {nama},\n\nIni adalah status terkini untuk peranti anda."
+        body = f"🏷️ ID Tiket: {tid}\n⚙️ Status Semasa: {status}\n💻 Model: {model}\n\nKami sedang berusaha menyelesaikannya.\n\nTerima Kasih,\nDCK Tech Team"
 
-    # GABUNGAN PENUH
-    full_msg = f"{header}\n{detail_content}\n{footer}\n\n- DCK Tech Team -"
+    full_msg = f"{header}\n\n{body}"
 
     if type == "WA":
-        # WhatsApp Styling (*Bold*)
-        wa_msg = full_msg.replace("BUTIRAN PERANTI:", "*BUTIRAN PERANTI:*").replace("DIAGNOSIS & KONDISI:", "*DIAGNOSIS & KONDISI:*")
-        return f"https://wa.me/{phone}?text={urllib.parse.quote(wa_msg)}"
-    
+        return f"https://wa.me/{valid_phone}?text={urllib.parse.quote(full_msg)}"
     elif type == "EMAIL":
-        return f"mailto:{email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(full_msg)}"
+        safe_sub = urllib.parse.quote(subject)
+        safe_body = urllib.parse.quote(full_msg)
+        return f"mailto:{email}?subject={safe_sub}&body={safe_body}"
 
 # --- 4. DATABASE ENGINE ---
 @st.cache_resource
@@ -242,13 +216,9 @@ def generate_pdf(t, type="SERVICE"):
 def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
     sender = st.session_state.email_user
     password = st.session_state.email_pass
+    if not sender or not password: return False, "Sila set Email Kedai di menu Tetapan dahulu."
     
-    if not sender or not password:
-        return False, "Sila set Email Kedai di menu Tetapan dahulu."
-    
-    # Template Email Sebenar (Sama mcm PDF tapi teks)
     subject = f"Tiket DCK: {data['ID']} - {data['Model']}"
-    
     body = f"""Hai {data['Customer']},
 
 Terima kasih berurusan dengan DCK TECH.
@@ -277,11 +247,9 @@ DCK Tech Team"""
     msg['To'] = to_email
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain'))
-    
     part = MIMEApplication(pdf_buffer.getvalue(), Name=pdf_name)
     part['Content-Disposition'] = f'attachment; filename="{pdf_name}"'
     msg.attach(part)
-    
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
@@ -289,8 +257,7 @@ DCK Tech Team"""
         server.send_message(msg)
         server.quit()
         return True, "Email berjaya dihantar!"
-    except Exception as e:
-        return False, f"Gagal hantar: {str(e)}"
+    except Exception as e: return False, f"Gagal hantar: {str(e)}"
 
 # --- 7. NAVIGATION ---
 PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN", "⚙️ TETAPAN"]
@@ -310,7 +277,7 @@ if st.session_state.page == "⚙️ TETAPAN":
         if st.form_submit_button("Simpan"):
             st.session_state.email_user = eu
             st.session_state.email_pass = ep
-            st.success("Disimpan!")
+            st.toast("Tetapan berjaya disimpan!", icon='✅')
 
 # === PAGE: DASHBOARD ===
 elif st.session_state.page == "📊 DASHBOARD":
@@ -322,11 +289,9 @@ elif st.session_state.page == "📊 DASHBOARD":
         c2.warning(f"CHECKING: {len(df[df['Status'] == 'Checking'])}")
         c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
         c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
-        
         st.divider()
         search = st.text_input("🔍 Cari Ticket:")
         if search: df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
-        
         st.write("### Senarai Job Terkini")
         for _, row in df.iloc[::-1].iterrows():
             with st.expander(f"{row.get('ID', '-')} - {row.get('Customer', '-')} ({row.get('Status', '-')})"):
@@ -340,11 +305,15 @@ elif st.session_state.page == "📊 DASHBOARD":
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     with st.container(border=True):
+        st.markdown("### 1. Info Pelanggan")
         c1, c2, c3 = st.columns(3)
         nama = c1.text_input("Nama"); phone = c2.text_input("No HP"); email = c3.text_input("Email (Optional)")
+        
+        st.markdown("### 2. Info Peranti")
         c4, c5, c6 = st.columns(3)
         model = c4.text_input("Model"); sn = c5.text_input("Serial No"); pwd = c6.text_input("Password Device")
         
+        st.markdown("### 3. Diagnosis")
         mslh = st.multiselect("Masalah", ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada Display", "Tiada Power", "Format", "Upgrade", "Lain-lain"])
         fiz = st.multiselect("Fizikal", ["Calar", "Pecah", "Skru Hilang", "Sempurna"])
         acc = st.multiselect("Aksesori", ["Bag", "Charger", "Mouse", "Tiada"])
@@ -362,38 +331,27 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                             res = cloudinary.uploader.upload(f)
                             img_urls.append(res['secure_url'])
                     img_str = ",".join(img_urls)
-                    # Mapping data untuk session state (supaya data tak hilang bila refresh)
-                    row_data = {"ID": tid, "Customer": nama, "Phone": phone, "Email": email, "Model": model, "SN": sn, "Password": pwd, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tech_Note": note, "Status": "Pending", "Images": img_str, "Image_Link": img_str, "Tarikh": datetime.now().strftime("%Y-%m-%d")}
-                    
-                    # Simpan Database
-                    add_row("Tickets", [tid, row_data['Tarikh'], nama, phone, email, model, sn, pwd, row_data['Masalah'], row_data['Fizikal'], row_data['Aksesori'], "Pending", 0, 0, img_str, note])
-                    
-                    st.success("Berjaya!")
-                    st.session_state.last_data = row_data
-                    st.rerun()
+                    row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, email, model, sn, pwd, ", ".join(mslh), ", ".join(fiz), ", ".join(acc), "Pending", 0, 0, img_str, note]
+                    add_row("Tickets", row)
+                    st.toast("Tiket Berjaya Dibuka!", icon='✅')
+                    st.session_state.last_data = {"ID": tid, "Customer": nama, "Phone": phone, "Email": email, "Model": model, "SN": sn, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tech_Note": note, "Status": "Pending", "Images": img_str}
+                    time.sleep(1); st.rerun()
 
     if 'last_data' in st.session_state:
         ld = st.session_state.last_data
         st.divider()
         st.success(f"Tiket {ld['ID']} Telah Dibuka!")
-        
         col_pdf, col_wa, col_email = st.columns(3)
         with col_pdf: st.download_button("📥 1. Download Tiket", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
-        with col_wa: 
-            # GUNA FUNGSI V47
-            wa_link = generate_links("WA", ld)
-            st.link_button("📱 2. WhatsApp Customer", wa_link, use_container_width=True)
+        with col_wa: st.link_button("📱 2. WhatsApp", generate_links("WA", ld['Phone'], ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'], ld['Tech_Note']), use_container_width=True)
         with col_email: 
             if ld['Email']:
-                # Guna HTML Button biasa untuk elak blank tab, tapi URL dah lengkap dgn body
-                em_link = generate_links("EMAIL", ld)
+                em_link = generate_links("EMAIL", ld['Phone'], ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'], ld['Tech_Note'])
                 st.markdown(f'<a href="{em_link}" style="text-decoration:none;"><button style="width:100%; border:1px solid #ff4b4b; background:white; color:#ff4b4b; padding:8px; border-radius:5px; cursor:pointer;">📧 3. Hantar Email (App)</button></a>', unsafe_allow_html=True)
-                
-                # Option 2: Auto Email (Server)
                 if st.button("📧 Atau Hantar Auto (Server)"):
                     pdf = generate_pdf(ld, "SERVICE")
                     ok, m = send_email_with_pdf(ld['Email'], ld, pdf, f"Tiket_{ld['ID']}.pdf")
-                    if ok: st.success(m)
+                    if ok: st.toast(m, icon='✅')
                     else: st.error(m)
 
 # === PAGE: UPDATE STATUS ===
@@ -404,7 +362,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         ids = df['ID'].astype(str).tolist()
         tgt = str(st.session_state.selected_id) if st.session_state.selected_id else ids[-1]
         pid = st.selectbox("Pilih Job:", ids, index=ids.index(tgt) if tgt in ids else 0)
-        
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
         with st.expander("ℹ️ MAKLUMAT TIKET & KOMUNIKASI (KLIK EDIT)", expanded=True):
@@ -422,7 +379,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     ec_mslh = st.text_area("Masalah", value=job.get('Masalah',''))
                     if st.form_submit_button("💾 SIMPAN PERUBAHAN"):
                         if update_customer_info_db(pid, ec_nama, ec_phone, ec_email, ec_model, ec_sn, ec_pwd, ec_mslh):
-                            st.success("Info Berjaya Diubah!"); st.rerun()
+                            st.toast("Info Berjaya Diubah!", icon='✅'); time.sleep(1); st.rerun()
             else:
                 c1, c2 = st.columns(2)
                 c1.write(f"**Nama:** {job.get('Customer','-')}"); c1.write(f"**Model:** {job.get('Model','-')}")
@@ -431,24 +388,19 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
             st.divider()
             ca, cb = st.columns(2)
-            
-            # --- LINK BUTTONS V47 ---
-            wa_url = generate_links("WA", job)
+            wa_url = generate_links("WA", job.get('Phone',''), job.get('Email',''), job.get('Customer',''), job.get('ID',''), job.get('Model',''), job.get('Status',''), job.get('Image_Link',''))
             ca.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
-            
             if job.get('Email'): 
-                # AUTO EMAIL SERVER BUTTON
                 with cb:
                     if st.button("📧 Hantar Email + PDF (Auto Server)", key=f"em_{pid}"):
                         doc_type = "INVOICE" if job.get('Status') in ["Done", "Collected"] else "SERVICE"
                         pdf_buf = generate_pdf(job, doc_type)
                         success, msg = send_email_with_pdf(job.get('Email'), job, pdf_buf, f"Status_{pid}.pdf")
-                        if success: st.success(msg)
+                        if success: st.toast(msg, icon='✅')
                         else: st.error(msg)
             else: cb.caption("Tiada Email.")
         
         c_left, c_right = st.columns([1, 2])
-        
         with c_left:
             img_str = str(job.get('Image_Link',''))
             if img_str and img_str != "nan":
@@ -463,14 +415,12 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
             total_kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
             
             tab_utama, tab_parts = st.tabs(["📝 Status & Invoice", "🔩 Parts & Kos"])
-            
             with tab_utama:
                 st.write(f"**TOTAL KOS PARTS:** RM {total_kos:.2f}")
                 with st.form("upd_status"):
                     stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
                     nt = st.text_area("Nota Technician", value=job.get('Tech_Note',''))
                     hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
-                    
                     if st.form_submit_button("UPDATE"):
                         sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
                         cl = robust_api_call(sheet.find, str(pid))
@@ -480,10 +430,8 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             robust_api_call(sheet.update_cell, cl.row, 14, hj)
                             robust_api_call(sheet.update_cell, cl.row, 16, nt)
                             st.cache_data.clear()
-                            st.success("Updated!"); st.rerun()
-                
-                if stt in ["Done", "Collected"]:
-                    st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+                            st.toast("Status Dikemaskini!", icon='🎉'); time.sleep(1); st.rerun()
+                if stt in ["Done", "Collected"]: st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
 
             with tab_parts:
                 t_list, t_edit, t_add = st.tabs(["📋 List", "✏️ Edit", "➕ Add"])
@@ -492,7 +440,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                         st.dataframe(parts[['NamaPart', 'WarrantyBulan', 'TarikhExpire', 'HargaBeli']], use_container_width=True)
                         dp = st.selectbox("Hapus Part ID:", ["-"] + parts['ID'].tolist())
                         if dp != "-" and st.button("Hapus"): 
-                            if delete_part(dp): st.rerun()
+                            if delete_part(dp): st.toast("Part dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
                 with t_edit:
                     if not parts.empty:
                         eid = st.selectbox("Edit Part:", parts['ID'].tolist())
@@ -503,9 +451,10 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             w = c_e1.number_input("Warr (Bln)", value=safe_int(cp['WarrantyBulan']))
                             h = c_e2.number_input("Harga", value=safe_float(cp['HargaBeli']))
                             if st.form_submit_button("Simpan"):
-                                update_part_data(eid, n, s, h, w); st.rerun()
+                                update_part_data(eid, n, s, h, w); st.toast("Part dikemaskini!", icon='✅'); time.sleep(1); st.rerun()
                 with t_add:
-                    with st.form("ap"):
+                    # FIX: CLEAR FORM ON SUBMIT
+                    with st.form("ap", clear_on_submit=True):
                         n = st.text_input("Part"); s = st.text_input("Supp")
                         c_a1, c_a2 = st.columns(2)
                         w = c_a1.number_input("Warr (Bln)", value=1, min_value=0)
@@ -513,7 +462,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                         if st.form_submit_button("Tambah"):
                             exp_date = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
                             add_row("Parts", [f"P-{int(time.time())}", pid, n, s, str(datetime.now().date()), w, exp_date, h])
-                            st.rerun()
+                            st.toast("Part ditambah!", icon='➕'); time.sleep(1); st.rerun()
 
 # === PAGE: INVENTORY & LAPORAN ===
 elif st.session_state.page == "📦 INVENTORY":
