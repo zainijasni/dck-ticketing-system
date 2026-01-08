@@ -116,7 +116,6 @@ def load_data(tab_name):
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
         # --- PATCH: KALAU DATAFRAME KOSONG, PAKSA ADA HEADER ---
-        # Ini untuk elak KeyError kalau sheet kosong
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -604,7 +603,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
             else:
                 c1, c2 = st.columns(2)
                 c1.write(f"**Nama:** {job.get('Customer','-')}"); c1.write(f"**Model:** {job.get('Model','-')}")
-                c1.write(f"**Phone:** {job.get('Phone','-')}"); c1.write(f"**Email:** {job.get('Email','-')}")
+                c1.write(f"**Phone:** {job.get('Phone','-')}"); c1.write(f"**S/N:** {job.get('SN','-')}")
                 c2.write(f"**Masalah:** {job.get('Masalah','-')}"); c2.error(f"🔐 PWD: {job.get('Password','-')}")
 
             st.divider()
