@@ -27,7 +27,7 @@ LIST_MASALAH = ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada 
 LIST_FIZIKAL = ["Calar Biasa", "Calar Teruk", "Skru Hilang", "Case Pecah", "I/O Port Rosak", "Sempurna"]
 LIST_AKSESORI = ["Beg", "Charger", "Mouse", "Tiada"]
 
-# --- 2. DATABASE ENGINE ---
+# --- 2. DATABASE ENGINE (SMART & RETRY) ---
 @st.cache_resource
 def get_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -35,33 +35,54 @@ def get_client():
     return gspread.authorize(creds)
 
 def init_db():
-    """Auto-Fix Header jika hilang"""
-    client = get_client()
-    sh = client.open_by_key(SHEET_ID)
+    """Jalan SEKALI sahaja bila app start untuk jimat kuota API"""
+    if 'db_checked' in st.session_state: return
     
-    # Setup Tickets Tab
-    try: ws = sh.worksheet("Tickets")
-    except: ws = sh.add_worksheet("Tickets", 1000, 20)
-    
-    header_t = ["ID", "Tarikh", "Customer", "Phone", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
-    if ws.row_values(1) != header_t: ws.update("A1:O1", [header_t])
+    try:
+        client = get_client()
+        sh = client.open_by_key(SHEET_ID)
         
-    # Setup Parts Tab
-    try: ws_p = sh.worksheet("Parts")
-    except: ws_p = sh.add_worksheet("Parts", 1000, 10)
+        # Tickets Header
+        try: ws = sh.worksheet("Tickets")
+        except: ws = sh.add_worksheet("Tickets", 1000, 20)
+        header_t = ["ID", "Tarikh", "Customer", "Phone", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
+        if ws.row_values(1) != header_t: ws.update("A1:O1", [header_t])
+            
+        # Parts Header
+        try: ws_p = sh.worksheet("Parts")
+        except: ws_p = sh.add_worksheet("Parts", 1000, 10)
+        header_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
+        if ws_p.row_values(1) != header_p: ws_p.update("A1:H1", [header_p])
         
-    header_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
-    if ws_p.row_values(1) != header_p: ws_p.update("A1:H1", [header_p])
+        st.session_state.db_checked = True
+    except: pass
+
+def robust_api_call(func, *args, **kwargs):
+    """Fungsi Sabar: Kalau error, tunggu dan cuba lagi"""
+    for i in range(3): # Cuba 3 kali
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if "Quota exceeded" in str(e) or "APIError" in str(e):
+                time.sleep(2) # Tunggu 2 saat
+                continue
+            else:
+                return None
+    return None
 
 def load_data(tab_name):
+    init_db() # Cuma check flag, tak panggil API kalau dah check
     client = get_client()
-    init_db() # Jalankan auto-fix setiap kali load
-    data = client.open_by_key(SHEET_ID).worksheet(tab_name).get_all_records()
-    return pd.DataFrame(data)
+    try:
+        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+        data = robust_api_call(sheet.get_all_records)
+        return pd.DataFrame(data) if data else pd.DataFrame()
+    except: return pd.DataFrame()
 
 def add_row(tab_name, row):
     client = get_client()
-    client.open_by_key(SHEET_ID).worksheet(tab_name).append_row(row)
+    sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
+    robust_api_call(sheet.append_row, row)
     st.cache_data.clear()
 
 # --- 3. PDF GENERATOR ---
@@ -81,14 +102,12 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(300, h-115, f"No HP: {t.get('Phone', '-')}")
     p.drawString(50, h-130, f"Model: {t.get('Model', '-')}")
     p.drawString(300, h-130, f"Serial No: {t.get('SN', '-')}")
-    
-    # PASSWORD (Kekal ada)
     p.setFont("Helvetica-Bold", 10)
-    p.drawString(50, h-150, f"PASSWORD / PIN: {t.get('Password', 'Tiada')}")
+    p.drawString(50, h-150, f"PASSWORD: {t.get('Password', 'Tiada')}")
     
     y = h-180
     p.line(50, y+10, w-50, y+10)
-    p.drawString(50, y, "DIAGNOSIS AWAL:"); y-=15
+    p.drawString(50, y, "DIAGNOSIS:"); y-=15
     p.setFont("Helvetica", 10)
     p.drawString(50, y, f"Masalah: {t.get('Masalah', '-')}"); y-=12
     p.drawString(50, y, f"Fizikal: {t.get('Fizikal', '-')}"); y-=12
@@ -96,7 +115,7 @@ def generate_pdf(t, type="SERVICE"):
     
     if type == "INVOICE":
         p.setFont("Helvetica-Bold", 14)
-        p.drawString(50, y, f"TOTAL PERLU DIBAYAR: RM {float(t.get('Harga_Jual', 0)):.2f}"); y-=30
+        p.drawString(50, y, f"TOTAL: RM {float(t.get('Harga_Jual', 0)):.2f}"); y-=30
     
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "TERMA & SYARAT:"); y-=15
     tc = ["1. Data hilang bukan tanggungjawab kedai.", "2. Barang tak tuntut > 3 bulan jadi hak milik kedai.", "3. Warranty sparepart sahaja."]
@@ -122,7 +141,6 @@ if menu == "📊 DASHBOARD":
     df = load_data("Tickets")
     
     if not df.empty:
-        st.subheader("Status Semasa")
         c1, c2, c3, c4 = st.columns(4)
         c1.info(f"PENDING: {len(df[df['Status'] == 'Pending'])}")
         c2.warning(f"CHECKING: {len(df[df['Status'] == 'Checking'])}")
@@ -172,14 +190,10 @@ elif menu == "📝 DAFTAR TIKET":
             if nama and tnc:
                 tid = f"DCK-{datetime.now().strftime('%d%H%M')}"
                 u_img = cloudinary.uploader.upload(img)["secure_url"] if img else ""
-                
-                # Susunan Row Mesti Sama dgn Header init_db
                 row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, model, sn, pwd, ", ".join(mslh), ", ".join(fiz), ", ".join(acc), "Pending", 0, 0, u_img, note]
                 add_row("Tickets", row)
-                
                 st.success("Berjaya!")
-                pdf_data = {"ID": tid, "Customer": nama, "Phone": phone, "Model": model, "SN": sn, "Password": pwd, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tarikh": row[1]}
-                st.session_state.last_pdf = pdf_data
+                st.session_state.last_pdf = {"ID": tid, "Customer": nama, "Phone": phone, "Model": model, "SN": sn, "Password": pwd, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tarikh": row[1]}
                 st.rerun()
                 
     if 'last_pdf' in st.session_state:
@@ -195,20 +209,12 @@ elif menu == "🔧 UPDATE STATUS":
         pid = st.selectbox("Pilih Job:", ids, index=ids.index(tgt) if tgt in ids else 0)
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
-        
-        # Display Info (Password ada)
         st.info(f"CUSTOMER: {job['Customer']} | MODEL: {job['Model']} | PWD: {job['Password']}")
         
         c1, c2 = st.columns([1, 2])
         with c1:
-            # --- FIX IMAGE ERROR DISINI ---
-            img_link = str(job['Image_Link'])
-            if img_link.startswith("http"): # Cuma papar jika link valid
-                st.image(img_link)
-            else:
-                st.caption("Tiada Gambar / Format Salah")
-            # ------------------------------
-            
+            if str(job['Image_Link']).startswith("http"): st.image(job['Image_Link'])
+            else: st.caption("Tiada Gambar")
             st.download_button("Print Tiket Asal", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
             
         with c2:
@@ -224,17 +230,18 @@ elif menu == "🔧 UPDATE STATUS":
                 hj = st.number_input("Harga Jual (Total Bill)", value=float(job['Harga_Jual']))
                 
                 if st.form_submit_button("UPDATE"):
-                    sh = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
-                    cl = sh.find(str(pid))
-                    sh.update_cell(cl.row, 11, stt)
-                    sh.update_cell(cl.row, 12, total_kos)
-                    sh.update_cell(cl.row, 13, hj)
-                    sh.update_cell(cl.row, 15, nt)
-                    st.cache_data.clear()
-                    st.success("Updated!"); st.rerun()
+                    sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
+                    cl = robust_api_call(sheet.find, str(pid)) # Guna robust call
+                    if cl:
+                        robust_api_call(sheet.update_cell, cl.row, 11, stt)
+                        robust_api_call(sheet.update_cell, cl.row, 12, total_kos)
+                        robust_api_call(sheet.update_cell, cl.row, 13, hj)
+                        robust_api_call(sheet.update_cell, cl.row, 15, nt)
+                        st.cache_data.clear()
+                        st.success("Updated!"); st.rerun()
             
             if stt == "Done" or stt == "Collected":
-                st.download_button("🖨️ PRINT INVOICE / RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf")
+                st.download_button("🖨️ PRINT INVOICE", generate_pdf(job, "INVOICE"), "Resit.pdf")
 
         st.divider()
         st.write("Parts List:")
