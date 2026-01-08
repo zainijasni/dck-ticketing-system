@@ -22,35 +22,21 @@ cloudinary.config(
 
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
+# --- 2. SESSION STATE (NAVIGASI FIX) ---
 if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 
-LIST_MASALAH = ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada Display", "Tiada Power", "Tak Boleh Charge", "Format", "Upgrade RAM/SSD", "Lain-lain"]
-LIST_FIZIKAL = ["Calar Biasa", "Calar Teruk", "Skru Hilang", "Case Pecah", "I/O Port Rosak", "Sempurna"]
-LIST_AKSESORI = ["Beg", "Charger", "Mouse", "Tiada"]
-
-# --- 2. HELPER FUNCTION (SAFETY FIRST) ---
+# --- 3. HELPER FUNCTIONS ---
 def safe_float(val):
-    """
-    Fungsi Penyelamat: Tukar apa saja jadi nombor (0.0) kalau error.
-    Elak sistem crash kalau ada 'RM', koma, atau kosong.
-    """
+    """Cuci duit: Buang RM, tukar koma ke titik, kosong jadi 0"""
     try:
-        if pd.isna(val) or val == "": return 0.0
-        # Buang RM, tukar koma jadi titik
-        clean_val = str(val).upper().replace("RM", "").replace(",", ".").strip()
-        return float(clean_val)
-    except:
-        return 0.0
-
-# --- 3. DATABASE ENGINE ---
-@st.cache_resource
-def get_client():
-    scope = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_info(st.secrets["google_creds"], scopes=scope)
-    return gspread.authorize(creds)
+        if pd.isna(val) or str(val).strip() == "": return 0.0
+        clean = str(val).upper().replace("RM", "").replace(",", ".").strip()
+        return float(clean)
+    except: return 0.0
 
 def robust_api_call(func, *args, **kwargs):
+    """Cuba 3 kali jika API busy"""
     for i in range(3):
         try:
             return func(*args, **kwargs)
@@ -59,20 +45,28 @@ def robust_api_call(func, *args, **kwargs):
             continue
     return None
 
+# --- 4. DATABASE ENGINE ---
+@st.cache_resource
+def get_client():
+    scope = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(st.secrets["google_creds"], scopes=scope)
+    return gspread.authorize(creds)
+
 def init_db():
     if 'db_checked' in st.session_state: return
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
+        # Tickets
         try: ws = sh.worksheet("Tickets")
         except: ws = sh.add_worksheet("Tickets", 1000, 20)
-        header_t = ["ID", "Tarikh", "Customer", "Phone", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
-        if ws.row_values(1) != header_t: ws.update("A1:O1", [header_t])
-            
+        h_t = ["ID", "Tarikh", "Customer", "Phone", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
+        if ws.row_values(1) != h_t: ws.update("A1:O1", [h_t])
+        # Parts
         try: ws_p = sh.worksheet("Parts")
         except: ws_p = sh.add_worksheet("Parts", 1000, 10)
-        header_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
-        if ws_p.row_values(1) != header_p: ws_p.update("A1:H1", [header_p])
+        h_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
+        if ws_p.row_values(1) != h_p: ws_p.update("A1:H1", [h_p])
         st.session_state.db_checked = True
     except: pass
 
@@ -113,7 +107,7 @@ def delete_part(part_id):
         return True
     return False
 
-# --- 4. PDF GENERATOR ---
+# --- 5. PDF GENERATOR ---
 def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
@@ -127,27 +121,20 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(50, h-100, f"TIKET ID: {t.get('ID', '-')}")
     p.drawString(300, h-100, f"Tarikh: {t.get('Tarikh', '-')}")
     p.drawString(50, h-115, f"Nama: {t.get('Customer', '-')}")
-    p.drawString(300, h-115, f"No HP: {t.get('Phone', '-')}")
     p.drawString(50, h-130, f"Model: {t.get('Model', '-')}")
-    p.drawString(300, h-130, f"S/N: {t.get('SN', '-')}")
-    
-    # PASSWORD REMOVED IN PDF
     
     y = h-160
     p.line(50, y+10, w-50, y+10)
     p.drawString(50, y, "DIAGNOSIS:"); y-=15
     p.setFont("Helvetica", 10)
     p.drawString(50, y, f"Masalah: {t.get('Masalah', '-')}"); y-=12
-    p.drawString(50, y, f"Fizikal: {t.get('Fizikal', '-')}"); y-=12
-    p.drawString(50, y, f"Aksesori: {t.get('Aksesori', '-')}"); y-=30
     
     if type == "INVOICE":
         p.setFont("Helvetica-Bold", 14)
-        # Guna safe_float kat sini juga
         p.drawString(50, y, f"TOTAL: RM {safe_float(t.get('Harga_Jual', 0)):.2f}"); y-=30
     
     p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "TERMA & SYARAT:"); y-=15
-    tc = ["1. Data hilang bukan tanggungjawab kedai.", "2. Barang tak tuntut > 3 bulan jadi hak milik kedai.", "3. Warranty sparepart sahaja."]
+    tc = ["1. Data hilang tanggungjawab sendiri.", "2. Barang tak tuntut > 3 bulan hak milik kedai.", "3. Warranty sparepart shj."]
     p.setFont("Helvetica", 8)
     for line in tc: p.drawString(50, y, line); y-=12
     
@@ -156,14 +143,27 @@ def generate_pdf(t, type="SERVICE"):
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 5. NAVIGATION ---
-NAV_OPTIONS = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN"]
-try: nav_index = NAV_OPTIONS.index(st.session_state.page)
-except: nav_index = 0
-menu = st.sidebar.radio("NAVIGASI", NAV_OPTIONS, index=nav_index)
-if menu != st.session_state.page: st.session_state.page = menu
+# --- 6. NAVIGATION LOGIC (THE FIX) ---
+# Kita define list menu dulu
+PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN"]
 
-# --- PAGE: DASHBOARD ---
+# Kita cari index semasa berdasarkan session state
+try:
+    current_index = PAGES.index(st.session_state.page)
+except:
+    current_index = 0
+
+# Sidebar dengan index yang betul
+selected_page = st.sidebar.radio("NAVIGASI UTAMA", PAGES, index=current_index)
+
+# Update session state jika user klik manual
+if selected_page != st.session_state.page:
+    st.session_state.page = selected_page
+    st.rerun()
+
+# --- 7. PAGE LOGIC ---
+
+# === DASHBOARD ===
 if st.session_state.page == "📊 DASHBOARD":
     st.title("📊 DCK Tech Dashboard")
     df = load_data("Tickets")
@@ -174,6 +174,10 @@ if st.session_state.page == "📊 DASHBOARD":
         c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
         c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
         
+        st.divider()
+        search = st.text_input("🔍 Cari Ticket:")
+        if search: df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+        
         st.write("### Senarai Job Terkini")
         for _, row in df.iloc[::-1].iterrows():
             with st.expander(f"{row['ID']} - {row['Customer']} ({row['Status']})"):
@@ -183,7 +187,7 @@ if st.session_state.page == "📊 DASHBOARD":
                     st.session_state.page = "🔧 UPDATE STATUS"
                     st.rerun()
 
-# --- PAGE: DAFTAR TIKET ---
+# === DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     with st.container(border=True):
@@ -192,13 +196,10 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         c3, c4, c5 = st.columns(3)
         model = c3.text_input("Model"); sn = c4.text_input("Serial No"); pwd = c5.text_input("Password Device")
         
-        st.subheader("Checklist")
-        mslh = st.multiselect("Masalah", LIST_MASALAH)
-        fiz = st.multiselect("Fizikal", LIST_FIZIKAL)
-        acc = st.multiselect("Aksesori", LIST_AKSESORI)
-        note = st.text_area("Nota Tambahan")
-        img = st.camera_input("Gambar")
-        tnc = st.checkbox("Setuju T&C")
+        mslh = st.multiselect("Masalah", ["Slow", "Screen Pecah", "Hinge Rosak", "Keyboard Rosak", "Tiada Display", "Tiada Power", "Format", "Upgrade", "Lain-lain"])
+        fiz = st.multiselect("Fizikal", ["Calar", "Pecah", "Skru Hilang", "Sempurna"])
+        acc = st.multiselect("Aksesori", ["Bag", "Charger", "Mouse", "Tiada"])
+        note = st.text_area("Nota"); img = st.camera_input("Gambar"); tnc = st.checkbox("Setuju T&C")
         
         if st.button("SIMPAN REKOD", use_container_width=True):
             if nama and tnc:
@@ -213,7 +214,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
     if 'last_pdf' in st.session_state:
         st.download_button("📥 Download PDF Tiket", generate_pdf(st.session_state.last_pdf, "SERVICE"), "Tiket.pdf")
 
-# --- PAGE: UPDATE STATUS ---
+# === UPDATE STATUS ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
     st.title("🔧 Bilik Technician")
     df = load_data("Tickets")
@@ -224,40 +225,26 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        with st.expander("ℹ️ MAKLUMAT PENUH TIKET (KLIK SINI)", expanded=True):
-            c_info1, c_info2 = st.columns(2)
-            c_info1.write(f"**Nama:** {job['Customer']}")
-            c_info1.write(f"**Model:** {job['Model']}")
-            c_info1.write(f"**S/N:** {job['SN']}")
-            c_info1.write(f"**Phone:** {job['Phone']}")
-            
-            c_info2.write(f"**Masalah:** {job['Masalah']}")
-            c_info2.write(f"**Fizikal:** {job['Fizikal']}")
-            c_info2.write(f"**Aksesori:** {job['Aksesori']}")
-            
-            # PASSWORD MERAH DI SINI SAHAJA
-            st.error(f"🔐 PASSWORD DEVICE: {job['Password']}")
-            if job['Tech_Note']: st.info(f"📝 Nota: {job['Tech_Note']}")
-
+        with st.expander("ℹ️ INFO TIKET & PASSWORD", expanded=True):
+            c1, c2 = st.columns(2)
+            c1.write(f"**Nama:** {job['Customer']}"); c1.write(f"**Model:** {job['Model']}")
+            c2.write(f"**Masalah:** {job['Masalah']}"); c2.error(f"🔐 PWD: {job['Password']}")
+        
         c1, c2 = st.columns([1, 2])
         with c1:
             if str(job['Image_Link']).startswith("http"): st.image(job['Image_Link'])
-            st.download_button("Print Tiket (Privacy)", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
+            st.download_button("Print Tiket", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
             
         with c2:
             df_p = load_data("Parts")
             parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
-            
-            # --- AUTO CALC GUNA SAFE_FLOAT ---
             total_kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
             
             st.markdown(f"### 💰 KOS MODAL: RM {total_kos:.2f}")
             
             with st.form("upd"):
                 stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job['Status']) if job['Status'] in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                nt = st.text_area("Update Nota Tech", value=job['Tech_Note'])
-                
-                # Gunakan safe_float pada value awal
+                nt = st.text_area("Nota Tech", value=job['Tech_Note'])
                 hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job['Harga_Jual']))
                 
                 if st.form_submit_button("UPDATE STATUS & HARGA"):
@@ -271,49 +258,39 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                         st.cache_data.clear()
                         st.success("Updated!"); st.rerun()
             
-            if stt == "Done" or stt == "Collected":
+            if stt in ["Done", "Collected"]:
                 st.download_button("🖨️ PRINT INVOICE", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
 
-        st.divider()
         st.subheader("🔩 Pengurusan Parts")
+        t_list, t_edit, t_add = st.tabs(["List", "Edit", "Add"])
         
-        tab_list, tab_edit, tab_add = st.tabs(["📋 Senarai", "✏️ Edit Part", "➕ Tambah Part"])
-        
-        with tab_list:
+        with t_list:
             if not parts.empty: 
-                st.dataframe(parts[['ID', 'NamaPart', 'Supplier', 'HargaBeli']], use_container_width=True)
-                del_part = st.selectbox("Pilih Part untuk Hapus:", ["-"] + parts['ID'].tolist())
-                if del_part != "-" and st.button("Hapus Part Ini"):
-                     if delete_part(del_part): st.warning("Part Dihapus"); st.rerun()
-            else: st.info("Tiada part.")
-            
-        with tab_edit:
+                st.dataframe(parts[['ID', 'NamaPart', 'HargaBeli']])
+                dp = st.selectbox("Hapus Part ID:", ["-"] + parts['ID'].tolist())
+                if dp != "-" and st.button("Hapus"): 
+                    if delete_part(dp): st.rerun()
+                    
+        with t_edit:
             if not parts.empty:
-                edit_id = st.selectbox("Pilih ID Part untuk Edit:", parts['ID'].tolist())
-                curr_part = parts[parts['ID'] == edit_id].iloc[0]
-                
-                with st.form("edit_part_form"):
-                    e_nama = st.text_input("Nama Part", value=curr_part['NamaPart'])
-                    e_supp = st.text_input("Supplier", value=curr_part['Supplier'])
-                    
-                    # --- INI PUNCA ERROR TADI (DAH DIFIX) ---
-                    e_harga = st.number_input("Harga Beli (RM)", value=safe_float(curr_part['HargaBeli']))
-                    
-                    if st.form_submit_button("SIMPAN PERUBAHAN PART"):
-                        if update_part_data(edit_id, e_nama, e_supp, e_harga):
-                            st.success("Part Updated!"); st.rerun()
-            else: st.caption("Tiada part untuk diedit.")
-
-        with tab_add:
-            with st.form("add_p"):
-                pn = st.text_input("Part Baru"); ps = st.text_input("Supplier"); hb = st.number_input("Harga Beli", 0.0)
-                if st.form_submit_button("Tambah Part"):
-                    add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), 0, "", hb])
+                eid = st.selectbox("Edit Part ID:", parts['ID'].tolist())
+                cp = parts[parts['ID'] == eid].iloc[0]
+                with st.form("ep"):
+                    n = st.text_input("Nama", value=cp['NamaPart']); s = st.text_input("Supp", value=cp['Supplier'])
+                    h = st.number_input("Harga", value=safe_float(cp['HargaBeli']))
+                    if st.form_submit_button("Simpan"):
+                        update_part_data(eid, n, s, h); st.rerun()
+                        
+        with t_add:
+            with st.form("ap"):
+                n = st.text_input("Part"); s = st.text_input("Supp"); h = st.number_input("Harga", 0.0)
+                if st.form_submit_button("Tambah"):
+                    add_row("Parts", [f"P-{int(time.time())}", pid, n, s, str(datetime.now().date()), 0, "", h])
                     st.rerun()
 
-# --- PAGE: INVENTORY ---
+# === INVENTORY ===
 elif st.session_state.page == "📦 INVENTORY":
-    st.title("📦 Inventory Log")
+    st.title("📦 Inventory")
     df_p = load_data("Parts")
     if not df_p.empty:
         for i, row in df_p.iterrows():
@@ -325,16 +302,44 @@ elif st.session_state.page == "📦 INVENTORY":
                     st.session_state.page = "🔧 UPDATE STATUS"
                     st.rerun()
 
-# --- PAGE: LAPORAN ---
+# === LAPORAN (NEW & IMPROVED) ===
 elif st.session_state.page == "📈 LAPORAN":
-    st.title("📈 Laporan Prestasi")
+    st.title("📈 Laporan Analitik")
     df = load_data("Tickets")
     if not df.empty:
-        # Guna safe_float untuk pengiraan laporan juga
-        total_jual = sum([safe_float(x) for x in df['Harga_Jual']])
-        total_kos = sum([safe_float(x) for x in df['Kos_Part']])
-        untung = total_jual - total_kos
+        # 1. Bersihkan Data (Convert Type)
+        df['Tarikh'] = pd.to_datetime(df['Tarikh'], errors='coerce')
+        df['Harga_Jual'] = df['Harga_Jual'].apply(safe_float)
+        df['Kos_Part'] = df['Kos_Part'].apply(safe_float)
+        df['Untung'] = df['Harga_Jual'] - df['Kos_Part']
         
-        m1, m2 = st.columns(2)
-        m1.metric("Total Sales", f"RM {total_jual:.2f}")
-        m2.metric("Total Untung", f"RM {untung:.2f}")
+        # 2. Download Data Mentah
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Laporan Penuh (CSV)", csv, "Laporan_DCK.csv", "text/csv")
+        
+        st.divider()
+        
+        # 3. Statistik Tabular (Hari/Minggu/Bulan)
+        tab_h, tab_m, tab_b = st.tabs(["📅 Harian", "📆 Mingguan", "🗓️ Bulanan"])
+        
+        with tab_h:
+            st.write("### Jualan Harian (30 Hari Terakhir)")
+            daily = df.groupby(df['Tarikh'].dt.date)[['Harga_Jual', 'Untung']].sum().tail(30)
+            st.line_chart(daily)
+            st.dataframe(daily)
+
+        with tab_m:
+            st.write("### Jualan Mingguan")
+            # Group by Week
+            df['Minggu'] = df['Tarikh'].dt.to_period('W').astype(str)
+            weekly = df.groupby('Minggu')[['Harga_Jual', 'Untung']].sum()
+            st.bar_chart(weekly)
+            st.dataframe(weekly)
+
+        with tab_b:
+            st.write("### Jualan Bulanan")
+            # Group by Month
+            df['Bulan'] = df['Tarikh'].dt.to_period('M').astype(str)
+            monthly = df.groupby('Bulan')[['Harga_Jual', 'Untung']].sum()
+            st.bar_chart(monthly)
+            st.dataframe(monthly)
