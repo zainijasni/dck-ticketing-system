@@ -18,7 +18,7 @@ from email.mime.application import MIMEApplication
 import qrcode 
 
 # =============================================================================
-# 1. CONFIGURATION & SETUP
+# 1. CONFIGURATION & SETUP (WAJIB DUDUK ATAS SEKALI)
 # =============================================================================
 st.set_page_config(page_title="DCK Tech System", layout="wide")
 
@@ -52,6 +52,9 @@ if 'pos_cart' not in st.session_state:
 if 'restock_cart' not in st.session_state:
     st.session_state.restock_cart = []
 
+if 'db_ready' not in st.session_state:
+    st.session_state.db_ready = False
+
 if 'config' not in st.session_state:
     st.session_state.config = {
         "Company_Name": "DCK TECH SERVICES",
@@ -84,12 +87,12 @@ def safe_int(val):
         return 0
 
 def robust_api_call(func, *args, **kwargs):
-    """Fungsi ini cuba panggil API 3 kali jika gagal"""
+    """Cuba panggil API. Jika gagal, rehat sekejap dan cuba lagi."""
     for i in range(3):
         try:
             return func(*args, **kwargs)
         except Exception:
-            time.sleep(2) # V79: Tambah masa rehat 2 saat kalau error
+            time.sleep(1.5) # Rehat 1.5 saat jika error
             continue
     return None
 
@@ -105,7 +108,7 @@ def clean_phone_number_my(phone_input):
         return "6" + p
 
 # =============================================================================
-# 3. DATABASE ENGINE (Google Sheets)
+# 3. DATABASE ENGINE
 # =============================================================================
 @st.cache_resource
 def get_client():
@@ -113,13 +116,14 @@ def get_client():
     creds = Credentials.from_service_account_info(st.secrets["google_creds"], scopes=scope)
     return gspread.authorize(creds)
 
-def init_db(force_check=False):
+def init_db():
     """
-    V79 Update: force_check parameter untuk paksa semak database
-    walaupun session state kata dah semak.
+    Fungsi ini hanya berjalan SEKALI sahaja apabila aplikasi mula dibuka.
+    Ia memastikan semua Tab dan Header wujud.
     """
-    if 'db_checked' in st.session_state and not force_check:
+    if st.session_state.db_ready:
         return
+
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
@@ -177,24 +181,25 @@ def init_db(force_check=False):
         if len(ws_r.row_values(1)) != len(h_r):
             ws_r.update("A1:H1", [h_r])
 
-        st.session_state.db_checked = True
-    except Exception as e:
-        # Jangan stop app kalau init fail, cuma print error di logs
-        print(f"Init DB Error: {e}")
-        pass
+        # Tandakan DB sudah sedia
+        st.session_state.db_ready = True
 
+    except Exception as e:
+        st.error(f"Ralat Database Init: {e}")
+
+# Panggil Init Sekali Sahaja di sini
+init_db()
+
+# --- DATA LOADING (V80: Optimized Cache) ---
+@st.cache_data(ttl=5) # Cache data selama 5 saat sahaja
 def load_data(tab_name):
-    # V79: Panggil init_db() setiap kali load data untuk pastikan tab wujud
-    # selepas Boss delete manual.
-    init_db(force_check=True)
-    
     client = get_client()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
         df = pd.DataFrame(data) if data else pd.DataFrame()
         
-        # Patch Empty
+        # Patch Empty DataFrame
         if df.empty:
             if tab_name == "Tickets":
                 df = pd.DataFrame(columns=["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"])
@@ -207,11 +212,13 @@ def load_data(tab_name):
             elif tab_name == "Restock_Log":
                  df = pd.DataFrame(columns=["LogID", "Date", "InvoiceNo", "Supplier", "ItemName", "QtyAdded", "CostPrice", "TotalCost"])
 
+        # Patch Missing Columns if any
         if tab_name == "Tickets" and "Email" not in df.columns:
             df["Email"] = ""
+            
         return df
     except:
-        return pd.DataFrame()
+        return pd.DataFrame() # Return empty DF if fail
 
 def load_config():
     try:
@@ -233,16 +240,9 @@ def save_config_to_db(new_config):
 
 def add_row(tab_name, row):
     client = get_client()
-    # V79 FIX: Error Handling kalau tab tak jumpa (sebab baru delete)
-    try:
-        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
-    except:
-        # Kalau error (contoh: WorksheetNotFound), kita run init_db sekali lagi
-        init_db(force_check=True)
-        time.sleep(2) # Rehat sekejap bagi masa create tab
-        sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
-        
+    sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
     robust_api_call(sheet.append_row, row)
+    st.cache_data.clear() # Clear cache supaya data baru nampak
 
 def update_cell_data(tab_name, id_val, col_dict):
     client = get_client()
@@ -251,6 +251,7 @@ def update_cell_data(tab_name, id_val, col_dict):
     if cell:
         for col_idx, val in col_dict.items():
             robust_api_call(sheet.update_cell, cell.row, col_idx, val)
+        st.cache_data.clear()
         return True
     return False
 
@@ -260,6 +261,7 @@ def delete_row_data(tab_name, id_val):
     cell = robust_api_call(sheet.find, str(id_val))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row)
+        st.cache_data.clear()
         return True
     return False
 
@@ -267,13 +269,14 @@ def delete_row_data(tab_name, id_val):
 def update_stock(item_code, qty_change):
     # qty_change: Positif tambah, Negatif tolak
     client = get_client()
+    sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
-        sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
         cell = sheet.find(str(item_code))
         if cell:
             curr = safe_int(sheet.cell(cell.row, 5).value) # Col 5 is CurrentStock
             new_qty = curr + int(qty_change)
             sheet.update_cell(cell.row, 5, new_qty)
+            st.cache_data.clear()
             return True
     except:
         pass
@@ -281,14 +284,7 @@ def update_stock(item_code, qty_change):
 
 def check_and_update_master(code, name, cost, sell, qty, supplier):
     client = get_client()
-    # V79 FIX: Robust checking for Master_Inventory
-    try:
-        sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
-    except:
-        init_db(force_check=True)
-        time.sleep(2)
-        sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
-
+    sheet = client.open_by_key(SHEET_ID).worksheet("Master_Inventory")
     try:
         cell = sheet.find(str(code))
         if cell:
@@ -302,6 +298,7 @@ def check_and_update_master(code, name, cost, sell, qty, supplier):
             # Create new
             tgl = datetime.now().strftime("%Y-%m-%d")
             sheet.append_row([code, name, cost, sell, qty, supplier, tgl])
+        st.cache_data.clear()
         return True
     except:
         return False
@@ -318,6 +315,7 @@ def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
         sheet.update_cell(cell.row, 7, sn)
         sheet.update_cell(cell.row, 8, pwd)
         sheet.update_cell(cell.row, 9, masalah)
+        st.cache_data.clear()
         return True
     return False
 
@@ -327,6 +325,7 @@ def delete_part(part_id):
     cell = robust_api_call(sheet.find, str(part_id))
     if cell:
         robust_api_call(sheet.delete_rows, cell.row)
+        st.cache_data.clear()
         return True
     return False
 
@@ -435,7 +434,6 @@ def generate_pdf(t, type="SERVICE"):
         for itm in items:
             p.drawString(350, y, str(itm.get('Qty', 1)))
             p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
-            # Papar Warranty di Resit
             desc_text = f"{str(itm.get('Item', '-'))} (W: {itm.get('Warranty','-')})"
             y_item = draw_wrapped_text(p, desc_text, 50, y, 280)
             y = y_item - 10
@@ -534,7 +532,7 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
         return False, str(e)
 
 # =============================================================================
-# 🚦 V70 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
+# 🚦 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
 # =============================================================================
 query_params = st.query_params 
 sn_query = query_params.get("sn", None)
@@ -551,7 +549,6 @@ if sn_query:
     load_config()
     cfg = st.session_state.config
     
-    # Header: Digital Profile
     c_logo, c_title = st.columns([1, 4])
     with c_title:
         st.title(f"💻 {cfg.get('Company_Name', 'DCK TECH')} - Digital Profile")
@@ -613,36 +610,39 @@ if st.session_state.page == "📊 DASHBOARD":
     df = load_data("Tickets")
     df_s = load_data("Sales")
     
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    sales_today = 0.0
-    if not df_s.empty:
-        sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
-
-    if not df.empty:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.info(f"PENDING: {len(df[df['Status'] == 'Pending'])}")
-        c2.warning(f"CHECKING: {len(df[df['Status'] == 'Checking'])}")
-        c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
-        c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
-    
-    st.divider()
-    st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
-    
-    st.write("### 🔍 Cari Ticket")
-    search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
-    st.write("### Senarai Job Terkini")
-    if not df.empty:
-        if search:
-            df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
-        for _, row in df.iloc[::-1].head(10).iterrows():
-            with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
-                st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
-                if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
-                    st.session_state.selected_id = row.get('ID')
-                    st.session_state.page = "🔧 UPDATE STATUS"
-                    st.rerun()
+    if df.empty and df_s.empty:
+        st.warning("Data sedang dimuatkan atau database kosong. Sila tunggu sebentar...")
     else:
-        st.info("Tiada rekod tiket.")
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        sales_today = 0.0
+        if not df_s.empty:
+            sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
+
+        if not df.empty:
+            c1, c2, c3, c4 = st.columns(4)
+            c1.info(f"PENDING: {len(df[df['Status'] == 'Pending'])}")
+            c2.warning(f"CHECKING: {len(df[df['Status'] == 'Checking'])}")
+            c3.success(f"DONE: {len(df[df['Status'] == 'Done'])}")
+            c4.error(f"COLLECTED: {len(df[df['Status'] == 'Collected'])}")
+        
+        st.divider()
+        st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
+        
+        st.write("### 🔍 Cari Ticket")
+        search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
+        st.write("### Senarai Job Terkini")
+        if not df.empty:
+            if search:
+                df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+            for _, row in df.iloc[::-1].head(10).iterrows():
+                with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
+                    st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
+                    if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
+                        st.session_state.selected_id = row.get('ID')
+                        st.session_state.page = "🔧 UPDATE STATUS"
+                        st.rerun()
+        else:
+            st.info("Tiada rekod tiket.")
 
 # === PAGE: DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
@@ -954,8 +954,8 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 with st.form("use_part_form", clear_on_submit=True):
                     sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
                     
-                    # Warranty option for Part (Moved to Done Status logic above, but keep here if needed per part)
-                    # Simplified per request: Warranty is mainly on the Job receipt now.
+                    # Warranty option for Part
+                    warr_part = st.radio("Warranty Part (Untuk Client)", [1, 3], horizontal=True, format_func=lambda x: f"{x} Bulan")
                     
                     if st.form_submit_button("Guna Part Ini"):
                         if sel_part != "-":
@@ -963,9 +963,11 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             # Use .get to prevent KeyError if Supplier column is missing/empty
                             supplier = item_data.get('Supplier', 'Internal Stock')
                             
-                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "-", "-", item_data['CostPrice']])
+                            exp = (datetime.now() + pd.DateOffset(months=int(warr_part))).strftime("%Y-%m-%d")
+                            
+                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), warr_part, exp, item_data['CostPrice']])
                             update_stock(item_data['ItemCode'], -1)
-                            st.toast(f"{item_data['ItemName']} ditambah ke Job!", icon='✅')
+                            st.toast(f"{item_data['ItemName']} ditambah ke Job (Warranty {warr_part} Bulan)!", icon='✅')
                             time.sleep(1)
                             st.rerun()
                         else:
@@ -1036,9 +1038,12 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     progress_text = "Sedang menyimpan..."
                     my_bar = st.progress(0, text=progress_text)
                     
-                    # V79: Add sleep to prevent APIError
                     for i, item in enumerate(st.session_state.restock_cart):
-                        time.sleep(1.5) # Anti-jamming mechanism
+                        
+                        # V79: Smart Anti-Jamming Logic
+                        # Hanya rehat kalau item ke-5 ke atas untuk elak slow sangat
+                        if i > 0 and i % 5 == 0:
+                            time.sleep(2) 
                         
                         found_code = None
                         if not df_m.empty:
