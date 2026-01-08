@@ -9,7 +9,7 @@ from google.oauth2.service_account import Credentials
 import cloudinary
 import cloudinary.uploader
 import time
-import urllib.parse # Untuk buat link WhatsApp/Email
+import urllib.parse
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="DCK Tech System", layout="wide")
@@ -23,11 +23,10 @@ cloudinary.config(
 
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
-# --- 2. SESSION STATE ---
 if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 
-# --- 3. HELPER FUNCTIONS ---
+# --- 2. HELPER FUNCTIONS ---
 def safe_float(val):
     try:
         if pd.isna(val) or str(val).strip() == "": return 0.0
@@ -49,22 +48,17 @@ def robust_api_call(func, *args, **kwargs):
     return None
 
 def generate_whatsapp_link(phone, nama, tid, model, status, img_links):
-    """Buat link WhatsApp dengan mesej pre-filled"""
-    # Cuci no phone (buang + atau -)
     clean_phone = str(phone).replace("+", "").replace("-", "").replace(" ", "")
-    if clean_phone.startswith("0"): clean_phone = "6" + clean_phone # Format Malaysia
-    
-    msg = f"*DCK TECH SERVICES*\n\nHai {nama},\nTiket ID: {tid}\nModel: {model}\nStatus: {status}\n\nLihat gambar peranti anda di sini:\n{img_links}\n\nTerima kasih!"
-    encoded_msg = urllib.parse.quote(msg)
-    return f"https://wa.me/{clean_phone}?text={encoded_msg}"
+    if clean_phone.startswith("0"): clean_phone = "6" + clean_phone
+    msg = f"*DCK TECH SERVICES*\n\nHai {nama},\nTiket ID: {tid}\nModel: {model}\nStatus: {status}\n\nLihat gambar peranti:\n{img_links}\n\nTerima kasih!"
+    return f"https://wa.me/{clean_phone}?text={urllib.parse.quote(msg)}"
 
 def generate_email_link(email, nama, tid, model, status, img_links):
-    """Buat link Mailto"""
     subject = urllib.parse.quote(f"Update Tiket DCK Tech: {tid}")
-    body = urllib.parse.quote(f"Hai {nama},\n\nBerikut adalah status terkini peranti anda:\n\nTiket ID: {tid}\nModel: {model}\nStatus: {status}\n\nGambar Peranti:\n{img_links}\n\nSekian, Terima Kasih.\nDCK Tech Team")
+    body = urllib.parse.quote(f"Hai {nama},\n\nStatus Terkini:\nTiket ID: {tid}\nModel: {model}\nStatus: {status}\n\nGambar:\n{img_links}\n\nTerima Kasih.\nDCK Tech Team")
     return f"mailto:{email}?subject={subject}&body={body}"
 
-# --- 4. DATABASE ENGINE ---
+# --- 3. DATABASE ENGINE ---
 @st.cache_resource
 def get_client():
     scope = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -76,18 +70,19 @@ def init_db():
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
-        # Tickets (Tambah Email)
+        
+        # Tickets Header (16 Kolum)
         try: ws = sh.worksheet("Tickets")
         except: ws = sh.add_worksheet("Tickets", 1000, 20)
-        # Header baru ada EMAIL
         h_t = ["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
-        if ws.row_values(1) != h_t: ws.update("A1:P1", [h_t])
+        if len(ws.row_values(1)) != len(h_t): ws.update("A1:P1", [h_t])
         
-        # Parts
+        # Parts Header
         try: ws_p = sh.worksheet("Parts")
         except: ws_p = sh.add_worksheet("Parts", 1000, 10)
         h_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
         if ws_p.row_values(1) != h_p: ws_p.update("A1:H1", [h_p])
+        
         st.session_state.db_checked = True
     except: pass
 
@@ -97,7 +92,9 @@ def load_data(tab_name):
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
         data = robust_api_call(sheet.get_all_records)
-        return pd.DataFrame(data) if data else pd.DataFrame()
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        if tab_name == "Tickets" and not df.empty and "Email" not in df.columns: df["Email"] = ""
+        return df
     except: return pd.DataFrame()
 
 def add_row(tab_name, row):
@@ -131,7 +128,25 @@ def delete_part(part_id):
         return True
     return False
 
-# --- 5. PDF GENERATOR ---
+# --- FUNGSI PENTING: UPDATE CUSTOMER INFO ---
+def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
+    client = get_client()
+    sheet = client.open_by_key(SHEET_ID).worksheet("Tickets")
+    cell = robust_api_call(sheet.find, str(tid))
+    if cell:
+        # Col 3=Cust, 4=Phone, 5=Email, 6=Model, 7=SN, 8=Pwd, 9=Masalah
+        robust_api_call(sheet.update_cell, cell.row, 3, nama)
+        robust_api_call(sheet.update_cell, cell.row, 4, phone)
+        robust_api_call(sheet.update_cell, cell.row, 5, email)
+        robust_api_call(sheet.update_cell, cell.row, 6, model)
+        robust_api_call(sheet.update_cell, cell.row, 7, sn)
+        robust_api_call(sheet.update_cell, cell.row, 8, pwd)
+        robust_api_call(sheet.update_cell, cell.row, 9, masalah)
+        st.cache_data.clear()
+        return True
+    return False
+
+# --- 4. PDF GENERATOR ---
 def generate_pdf(t, type="SERVICE"):
     buffer = BytesIO()
     p = canvas.Canvas(buffer, pagesize=A4)
@@ -141,7 +156,6 @@ def generate_pdf(t, type="SERVICE"):
     p.setFont("Helvetica", 10); p.drawString(50, h-65, "Resit & Borang Penerimaan Servis")
     p.line(50, h-75, w-50, h-75)
     
-    # Detail Lengkap (No Password)
     p.setFont("Helvetica", 10)
     p.drawString(50, h-100, f"TIKET ID: {t.get('ID', '-')}")
     p.drawString(300, h-100, f"Tarikh: {t.get('Tarikh', '-')}")
@@ -151,15 +165,10 @@ def generate_pdf(t, type="SERVICE"):
     p.drawString(300, h-130, f"Model: {t.get('Model', '-')}")
     p.drawString(50, h-145, f"Serial No: {t.get('SN', '-')}")
     
-    # NO PASSWORD IN PDF AS REQUESTED
-    
     y = h-170
     p.line(50, y+10, w-50, y+10)
-    p.setFont("Helvetica-Bold", 10)
-    p.drawString(50, y, "DETAIL DIAGNOSIS:"); y-=15
+    p.setFont("Helvetica-Bold", 10); p.drawString(50, y, "DETAIL DIAGNOSIS:"); y-=15
     p.setFont("Helvetica", 10)
-    
-    # Text Wrap sikit kalau panjang
     p.drawString(50, y, f"Masalah: {t.get('Masalah', '-')}"); y-=15
     p.drawString(50, y, f"Fizikal: {t.get('Fizikal', '-')}"); y-=15
     p.drawString(50, y, f"Aksesori: {t.get('Aksesori', '-')}"); y-=15
@@ -179,7 +188,7 @@ def generate_pdf(t, type="SERVICE"):
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 6. NAVIGATION ---
+# --- 5. NAVIGATION ---
 PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN"]
 try: current_index = PAGES.index(st.session_state.page)
 except: current_index = 0
@@ -188,7 +197,7 @@ if selected_page != st.session_state.page:
     st.session_state.page = selected_page
     st.rerun()
 
-# === DASHBOARD ===
+# === PAGE: DASHBOARD ===
 if st.session_state.page == "📊 DASHBOARD":
     st.title("📊 DCK Tech Dashboard")
     df = load_data("Tickets")
@@ -205,20 +214,20 @@ if st.session_state.page == "📊 DASHBOARD":
         
         st.write("### Senarai Job Terkini")
         for _, row in df.iloc[::-1].iterrows():
-            with st.expander(f"{row['ID']} - {row['Customer']} ({row['Status']})"):
-                st.write(f"Model: {row['Model']} | Masalah: {row['Masalah']}")
+            with st.expander(f"{row.get('ID', '-')} - {row.get('Customer', '-')} ({row.get('Status', '-')})"):
+                st.write(f"Model: {row.get('Model', '-')} | Masalah: {row.get('Masalah', '-')}")
                 if st.button("🔧 Manage Job", key=f"btn_{row['ID']}"):
                     st.session_state.selected_id = row['ID']
                     st.session_state.page = "🔧 UPDATE STATUS"
                     st.rerun()
 
-# === DAFTAR TIKET (MULTI IMAGE UPDATE) ===
+# === PAGE: DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     with st.container(border=True):
         st.markdown("### 1. Info Pelanggan")
         c1, c2, c3 = st.columns(3)
-        nama = c1.text_input("Nama"); phone = c2.text_input("No HP (601xxx)"); email = c3.text_input("Email (Optional)")
+        nama = c1.text_input("Nama"); phone = c2.text_input("No HP"); email = c3.text_input("Email (Optional)")
         
         st.markdown("### 2. Info Peranti")
         c4, c5, c6 = st.columns(3)
@@ -230,59 +239,37 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
         acc = st.multiselect("Aksesori", ["Bag", "Charger", "Mouse", "Tiada"])
         note = st.text_area("Nota Tambahan")
         
-        # --- MULTI IMAGE UPLOADER ---
-        st.markdown("### 4. Gambar Peranti (Boleh Pilih Banyak)")
-        uploaded_files = st.file_uploader("Snap/Pilih Gambar (Depan, Belakang, Tepi)", accept_multiple_files=True, type=['jpg','png','jpeg'])
+        st.markdown("### 4. Gambar Peranti")
+        uploaded_files = st.file_uploader("Pilih Gambar", accept_multiple_files=True, type=['jpg','png','jpeg'])
         tnc = st.checkbox("Setuju T&C")
         
         if st.button("SIMPAN REKOD & SEND NOTIF", use_container_width=True):
             if nama and tnc:
-                with st.spinner("Sedang upload gambar..."):
+                with st.spinner("Processing..."):
                     tid = f"DCK-{datetime.now().strftime('%d%H%M')}"
-                    
-                    # Upload Multiple Images ke Cloudinary
                     img_urls = []
                     if uploaded_files:
                         for f in uploaded_files:
                             res = cloudinary.uploader.upload(f)
                             img_urls.append(res['secure_url'])
-                    
-                    img_str = ",".join(img_urls) # Simpan sebagai string koma (url1,url2)
-                    
-                    # Simpan Database
+                    img_str = ",".join(img_urls)
                     row = [tid, datetime.now().strftime("%Y-%m-%d"), nama, phone, email, model, sn, pwd, ", ".join(mslh), ", ".join(fiz), ", ".join(acc), "Pending", 0, 0, img_str, note]
                     add_row("Tickets", row)
-                    
                     st.success("Berjaya!")
                     st.session_state.last_data = {"ID": tid, "Customer": nama, "Phone": phone, "Email": email, "Model": model, "SN": sn, "Masalah": ", ".join(mslh), "Fizikal": ", ".join(fiz), "Aksesori": ", ".join(acc), "Tarikh": row[1], "Tech_Note": note, "Status": "Pending", "Images": img_str}
                     st.rerun()
 
-    # --- ACTION BUTTONS LEPAS DAFTAR ---
     if 'last_data' in st.session_state:
         ld = st.session_state.last_data
         st.divider()
         st.success(f"Tiket {ld['ID']} Telah Dibuka!")
-        
         col_pdf, col_wa, col_email = st.columns(3)
-        
-        # 1. PDF
-        with col_pdf:
-            st.download_button("📥 1. Download Tiket PDF", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
-            
-        # 2. WhatsApp
-        with col_wa:
-            wa_link = generate_whatsapp_link(ld['Phone'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'])
-            st.link_button("📱 2. Hantar WhatsApp", wa_link, use_container_width=True)
-            
-        # 3. Email
-        with col_email:
-            if ld['Email']:
-                email_link = generate_email_link(ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images'])
-                st.link_button("📧 3. Hantar Email", email_link, use_container_width=True)
-            else:
-                st.caption("Tiada Email Direkodkan")
+        with col_pdf: st.download_button("📥 1. Download Tiket", generate_pdf(ld, "SERVICE"), "Tiket.pdf", use_container_width=True)
+        with col_wa: st.link_button("📱 2. WhatsApp", generate_whatsapp_link(ld['Phone'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images']), use_container_width=True)
+        with col_email: 
+            if ld['Email']: st.link_button("📧 3. Email", generate_email_link(ld['Email'], ld['Customer'], ld['ID'], ld['Model'], ld['Status'], ld['Images']), use_container_width=True)
 
-# === UPDATE STATUS ===
+# === PAGE: UPDATE STATUS (THE EDIT FIX) ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
     st.title("🔧 Bilik Technician")
     df = load_data("Tickets")
@@ -293,32 +280,51 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        with st.expander("ℹ️ MAKLUMAT PENUH & KOMUNIKASI", expanded=True):
-            c1, c2 = st.columns(2)
-            c1.write(f"**Nama:** {job['Customer']}"); c1.write(f"**Model:** {job['Model']}")
-            c1.write(f"**Phone:** {job['Phone']}"); c1.write(f"**Email:** {job['Email']}")
-            c2.write(f"**Masalah:** {job['Masalah']}"); c2.error(f"🔐 PWD: {job['Password']}")
+        # --- BOX MAKLUMAT UTAMA ---
+        with st.expander("ℹ️ MAKLUMAT PENUH TIKET & KOMUNIKASI", expanded=True):
             
-            # --- ACTION BAR (WhatsApp/Email) ---
+            # --- CHECKBOX UNTUK EDIT CUSTOMER INFO ---
+            edit_mode = st.checkbox("✏️ Tick Untuk Edit Maklumat Pelanggan")
+            
+            if edit_mode:
+                st.warning("Anda sedang dalam Mode Edit. Sila berhati-hati.")
+                with st.form("edit_cust_form"):
+                    ec_nama = st.text_input("Nama", value=job.get('Customer',''))
+                    c_ec1, c_ec2 = st.columns(2)
+                    ec_phone = c_ec1.text_input("Phone", value=job.get('Phone',''))
+                    ec_email = c_ec2.text_input("Email", value=job.get('Email',''))
+                    
+                    c_ec3, c_ec4, c_ec5 = st.columns(3)
+                    ec_model = c_ec3.text_input("Model", value=job.get('Model',''))
+                    ec_sn = c_ec4.text_input("Serial No", value=job.get('SN',''))
+                    ec_pwd = c_ec5.text_input("Password", value=job.get('Password',''))
+                    
+                    ec_mslh = st.text_area("Masalah", value=job.get('Masalah',''))
+                    
+                    if st.form_submit_button("💾 SIMPAN PERUBAHAN MAKLUMAT"):
+                        if update_customer_info_db(pid, ec_nama, ec_phone, ec_email, ec_model, ec_sn, ec_pwd, ec_mslh):
+                            st.success("Info Berjaya Diubah!"); st.rerun()
+            else:
+                # VIEW MODE (Tak Boleh Edit)
+                c1, c2 = st.columns(2)
+                c1.write(f"**Nama:** {job.get('Customer','-')}"); c1.write(f"**Model:** {job.get('Model','-')}")
+                c1.write(f"**Phone:** {job.get('Phone','-')}"); c1.write(f"**Email:** {job.get('Email','-')}")
+                c2.write(f"**Masalah:** {job.get('Masalah','-')}"); c2.error(f"🔐 PWD: {job.get('Password','-')}")
+
             st.divider()
             ca, cb = st.columns(2)
-            wa_link = generate_whatsapp_link(job['Phone'], job['Customer'], job['ID'], job['Model'], job['Status'], job['Image_Link'])
-            ca.link_button("📱 Hantar Status ke WhatsApp", wa_link)
-            
-            if job['Email']:
-                email_link = generate_email_link(job['Email'], job['Customer'], job['ID'], job['Model'], job['Status'], job['Image_Link'])
-                cb.link_button("📧 Hantar Status ke Email", email_link)
+            ca.link_button("📱 WhatsApp Status", generate_whatsapp_link(job.get('Phone',''), job.get('Customer',''), job.get('ID',''), job.get('Model',''), job.get('Status',''), job.get('Image_Link','')))
+            if job.get('Email'): cb.link_button("📧 Email Status", generate_email_link(job.get('Email',''), job.get('Customer',''), job.get('ID',''), job.get('Model',''), job.get('Status',''), job.get('Image_Link','')))
         
         c_left, c_right = st.columns([1, 2])
         
         with c_left:
-            # Multi Image Display
-            img_str = str(job['Image_Link'])
+            img_str = str(job.get('Image_Link',''))
             if img_str and img_str != "nan":
-                urls = img_str.split(",") # Pecahkan koma
+                urls = img_str.split(",")
                 for u in urls:
                     if u.startswith("http"): st.image(u, use_container_width=True)
-            st.download_button("📄 Cetak Tiket (Untuk Tampal)", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
+            st.download_button("📄 Cetak Tiket", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
 
         with c_right:
             df_p = load_data("Parts")
@@ -330,14 +336,13 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
             with tab_utama:
                 st.write(f"**TOTAL KOS PARTS:** RM {total_kos:.2f}")
                 with st.form("upd_status"):
-                    stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job['Status']) if job['Status'] in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                    nt = st.text_area("Nota Technician", value=job['Tech_Note'])
-                    hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job['Harga_Jual']))
+                    stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
+                    nt = st.text_area("Nota Technician", value=job.get('Tech_Note',''))
+                    hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
                     
                     if st.form_submit_button("UPDATE STATUS & HARGA"):
                         sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
                         cl = robust_api_call(sheet.find, str(pid))
-                        # Update col 12(Status), 13(Kos), 14(Jual), 16(Note) - Sbb ada Email
                         if cl:
                             robust_api_call(sheet.update_cell, cl.row, 12, stt)
                             robust_api_call(sheet.update_cell, cl.row, 13, total_kos)
@@ -347,10 +352,10 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             st.success("Updated!"); st.rerun()
                 
                 if stt in ["Done", "Collected"]:
-                    st.download_button("🖨️ CETAK RESIT (INVOICE)", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+                    st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
 
             with tab_parts:
-                t_list, t_edit, t_add = st.tabs(["📋 Senarai", "✏️ Edit Part", "➕ Tambah Part"])
+                t_list, t_edit, t_add = st.tabs(["📋 List", "✏️ Edit", "➕ Add"])
                 with t_list:
                     if not parts.empty:
                         st.dataframe(parts[['NamaPart', 'WarrantyBulan', 'TarikhExpire', 'HargaBeli']], use_container_width=True)
@@ -359,27 +364,27 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                             if delete_part(dp): st.rerun()
                 with t_edit:
                     if not parts.empty:
-                        eid = st.selectbox("Pilih Part untuk Edit:", parts['ID'].tolist())
+                        eid = st.selectbox("Edit Part:", parts['ID'].tolist())
                         cp = parts[parts['ID'] == eid].iloc[0]
                         with st.form("ep"):
                             n = st.text_input("Nama", value=cp['NamaPart']); s = st.text_input("Supp", value=cp['Supplier'])
                             c_e1, c_e2 = st.columns(2)
-                            w = c_e1.number_input("Warranty (Bulan)", value=safe_int(cp['WarrantyBulan']))
-                            h = c_e2.number_input("Harga Beli (RM)", value=safe_float(cp['HargaBeli']))
-                            if st.form_submit_button("Simpan Perubahan"):
+                            w = c_e1.number_input("Warr (Bln)", value=safe_int(cp['WarrantyBulan']))
+                            h = c_e2.number_input("Harga", value=safe_float(cp['HargaBeli']))
+                            if st.form_submit_button("Simpan"):
                                 update_part_data(eid, n, s, h, w); st.rerun()
                 with t_add:
                     with st.form("ap"):
-                        n = st.text_input("Part Baru"); s = st.text_input("Supplier")
+                        n = st.text_input("Part"); s = st.text_input("Supp")
                         c_a1, c_a2 = st.columns(2)
-                        w = c_a1.number_input("Warranty (Bulan)", value=1, min_value=0)
-                        h = c_a2.number_input("Harga Beli (RM)", 0.0)
-                        if st.form_submit_button("Tambah Part"):
+                        w = c_a1.number_input("Warr (Bln)", value=1, min_value=0)
+                        h = c_a2.number_input("Harga", 0.0)
+                        if st.form_submit_button("Tambah"):
                             exp_date = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
                             add_row("Parts", [f"P-{int(time.time())}", pid, n, s, str(datetime.now().date()), w, exp_date, h])
                             st.rerun()
 
-# === INVENTORY & LAPORAN (Kekal Sama) ===
+# === PAGE: INVENTORY ===
 elif st.session_state.page == "📦 INVENTORY":
     st.title("📦 Inventory Log")
     df_p = load_data("Parts")
@@ -393,6 +398,7 @@ elif st.session_state.page == "📦 INVENTORY":
                     st.session_state.page = "🔧 UPDATE STATUS"
                     st.rerun()
 
+# === PAGE: LAPORAN ===
 elif st.session_state.page == "📈 LAPORAN":
     st.title("📈 Laporan Prestasi")
     df = load_data("Tickets")
