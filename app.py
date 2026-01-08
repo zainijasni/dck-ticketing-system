@@ -36,14 +36,19 @@ SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 # --- SESSION STATE INITIALIZATION ---
 if 'page' not in st.session_state:
     st.session_state.page = "📊 DASHBOARD"
+
 if 'selected_id' not in st.session_state:
     st.session_state.selected_id = None
+
 if 'email_user' not in st.session_state:
     st.session_state.email_user = ""
+
 if 'email_pass' not in st.session_state:
     st.session_state.email_pass = ""
+
 if 'pos_cart' not in st.session_state:
     st.session_state.pos_cart = []
+
 if 'restock_cart' not in st.session_state:
     st.session_state.restock_cart = []
 
@@ -99,7 +104,7 @@ def clean_phone_number_my(phone_input):
         return "6" + p
 
 # =============================================================================
-# 3. DATABASE ENGINE (Google Sheets)
+# 3. DATABASE ENGINE
 # =============================================================================
 @st.cache_resource
 def get_client():
@@ -149,12 +154,11 @@ def init_db():
             ws_c.append_row(["Key", "Value"])
             ws_c.append_row(["Company_Name", "DCK TECH"])
             
-        # 5. Master Inventory (V76: Added Supplier Back!)
+        # 5. Master Inventory
         try:
             ws_m = sh.worksheet("Master_Inventory")
         except:
             ws_m = sh.add_worksheet("Master_Inventory", 1000, 10)
-        # Added 'Supplier' at column 6 to fix KeyError
         h_m = ["ItemCode", "ItemName", "CostPrice", "SellPrice", "CurrentStock", "Supplier", "LastUpdated"]
         if len(ws_m.row_values(1)) != len(h_m):
             ws_m.update("A1:G1", [h_m])
@@ -172,11 +176,8 @@ def init_db():
     except:
         pass
 
-# --- V76: PERFORMANCE FIX (CACHING) ---
-# TTL=5 bermaksud dia simpan data 5 saat. Kalau Boss klik laju-laju, dia tak tarik DB banyak kali.
-@st.cache_data(ttl=5)
 def load_data(tab_name):
-    # Kita buang init_db dari sini supaya tak run banyak kali
+    init_db()
     client = get_client()
     try:
         sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
@@ -191,7 +192,6 @@ def load_data(tab_name):
             elif tab_name == "Sales":
                  df = pd.DataFrame(columns=["ID", "Tarikh", "Item", "Qty", "Harga_Unit", "Total", "Customer", "PaymentMethod", "Warranty"])
             elif tab_name == "Master_Inventory":
-                 # V76 Added Supplier
                  df = pd.DataFrame(columns=["ItemCode", "ItemName", "CostPrice", "SellPrice", "CurrentStock", "Supplier", "LastUpdated"])
             elif tab_name == "Restock_Log":
                  df = pd.DataFrame(columns=["LogID", "Date", "InvoiceNo", "Supplier", "ItemName", "QtyAdded", "CostPrice", "TotalCost"])
@@ -204,11 +204,7 @@ def load_data(tab_name):
 
 def load_config():
     try:
-        # Config file kecil, tak perlu cache lama sangat
-        client = get_client()
-        sheet = client.open_by_key(SHEET_ID).worksheet("Config")
-        data = robust_api_call(sheet.get_all_records)
-        df = pd.DataFrame(data) if data else pd.DataFrame()
+        df = load_data("Config")
         if not df.empty:
             st.session_state.config.update(dict(zip(df['Key'], df['Value'])))
     except:
@@ -279,7 +275,7 @@ def check_and_update_master(code, name, cost, sell, qty, supplier):
             sheet.update_cell(cell.row, 5, curr_qty + int(qty)) # Update Stock
             sheet.update_cell(cell.row, 3, cost) # Update Cost
             sheet.update_cell(cell.row, 4, sell) # Update Sell
-            sheet.update_cell(cell.row, 6, supplier) # Update Supplier V76
+            sheet.update_cell(cell.row, 6, supplier) # Update Supplier
         else:
             # Create new
             tgl = datetime.now().strftime("%Y-%m-%d")
@@ -420,7 +416,6 @@ def generate_pdf(t, type="SERVICE"):
         for itm in items:
             p.drawString(350, y, str(itm.get('Qty', 1)))
             p.drawString(450, y, f"RM {safe_float(itm.get('Harga_Unit', 0)):.2f}")
-            # Papar Warranty di Resit
             desc_text = f"{str(itm.get('Item', '-'))} (W: {itm.get('Warranty','-')})"
             y_item = draw_wrapped_text(p, desc_text, 50, y, 280)
             y = y_item - 10
@@ -521,12 +516,10 @@ def send_email_with_pdf(to_email, data, pdf_buffer, pdf_name):
 # =============================================================================
 # 🚦 V70 GATEKEEPER LOGIC: DIGITAL HEALTH CARD (PROFILING MODE)
 # =============================================================================
-init_db() # Run init_db once at start to ensure headers correct
 query_params = st.query_params 
 sn_query = query_params.get("sn", None)
 
 if sn_query:
-    # --- MOD PUBLIC (DIGITAL HEALTH CARD) ---
     st.markdown("""
     <style>
         [data-testid="stSidebar"] {display: none;}
@@ -550,27 +543,21 @@ if sn_query:
         
     found = False
     if not df.empty:
-        # --- FIX: ROBUST S/N MATCHING ---
         history = df[df['SN'].astype(str).str.strip().str.upper() == str(sn_query).strip().upper()]
         
         if not history.empty:
             found = True
             latest = history.iloc[-1]
             
-            # --- 1. DEVICE IDENTITY CARD (No Status) ---
             with st.container(border=True):
                 c1, c2 = st.columns(2)
                 c1.write(f"**Model:** {latest.get('Model')}")
                 c2.write(f"**S/N:** {latest.get('SN')}")
             
-            # --- 2. UNIFIED HISTORY TIMELINE (ALL RECORDS) ---
             st.write("### 📜 Sejarah Pembaikan")
             
-            # Loop through ALL records (Newest first)
             for _, row in history.iloc[::-1].iterrows():
-                # Clean Timeline UI: Date - Problem
                 with st.expander(f"📅 {row['Tarikh']} : {row['Masalah']}"):
-                    # Green Solution Box
                     st.markdown(f"""
                     <div style="background-color: #d4edda; padding: 10px; border-radius: 5px; border: 1px solid #c3e6cb; color: #155724;">
                         <strong>✅ Solution / Tindakan:</strong><br>
@@ -641,7 +628,6 @@ if st.session_state.page == "📊 DASHBOARD":
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     
-    # V69: Read options from Config (Dynamic Checkbox)
     opt_mslh = [x.strip() for x in st.session_state.config.get("Options_Masalah", "Slow, Screen, Battery").split(",")]
     opt_fiz = [x.strip() for x in st.session_state.config.get("Options_Fizikal", "Calar, Pecah").split(",")]
     opt_acc = [x.strip() for x in st.session_state.config.get("Options_Aksesori", "Bag, Charger").split(",")]
@@ -703,7 +689,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 else:
                     st.error(m)
 
-# === PAGE: JUALAN KEDAI (V74 - SIMPLE & BULK) ===
+# === PAGE: JUALAN KEDAI ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     df_m = load_data("Master_Inventory")
@@ -892,7 +878,6 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
 
         with c_r:
             df_p = load_data("Parts")
-            # --- FIX: CHECK IF DATAFRAME HAS DATA & COLUMNS BEFORE FILTERING ---
             if not df_p.empty and 'TicketID' in df_p.columns:
                  parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
             else:
@@ -905,8 +890,16 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 st.write(f"**KOS:** RM {kos:.2f}")
                 with st.form("upd_status"):
                     stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                    nt = st.text_area("Solution", value=job.get('Tech_Note',''))
+                    
+                    new_note = job.get('Tech_Note','')
+                    if stt in ["Done", "Collected"]:
+                        w_choice = st.radio("Warranty Untuk Job Ini:", ["Tiada", "1 Bulan", "3 Bulan"], horizontal=True)
+                        if w_choice != "Tiada" and "Warranty:" not in new_note:
+                            new_note += f"\n[Warranty: {w_choice}]"
+                    
+                    nt = st.text_area("Solution", value=new_note)
                     hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
+                    
                     if st.form_submit_button("UPDATE"):
                         sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
                         cl = robust_api_call(sheet.find, str(pid))
@@ -938,24 +931,19 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 st.write("### ➕ Guna Part Dari Stok")
                 with st.form("use_part_form", clear_on_submit=True):
                     sel_part = st.selectbox("Pilih Part", ["-"] + list(stock_options.keys()))
-                    warr_part = st.radio("Warranty Part (Untuk Client)", [1, 3], horizontal=True, format_func=lambda x: f"{x} Bulan")
-                    
                     if st.form_submit_button("Guna Part Ini"):
                         if sel_part != "-":
                             item_data = stock_options[sel_part]
-                            # Use .get('Supplier', '-') to avoid KeyError if 'Supplier' is missing in Master_Inventory
-                            supplier = item_data.get('Supplier', '-') 
-                            exp = (datetime.now() + pd.DateOffset(months=int(warr_part))).strftime("%Y-%m-%d")
-                            
-                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), warr_part, exp, item_data['CostPrice']])
+                            supplier = item_data.get('Supplier', 'Internal Stock')
+                            add_row("Parts", [f"P-{int(time.time())}", pid, item_data['ItemName'], supplier, str(datetime.now().date()), "0", "-", item_data['CostPrice']])
                             update_stock(item_data['ItemCode'], -1)
-                            st.toast(f"{item_data['ItemName']} ditambah ke Job (Warranty {warr_part} Bulan)!", icon='✅')
+                            st.toast(f"{item_data['ItemName']} ditambah ke Job!", icon='✅')
                             time.sleep(1)
                             st.rerun()
                         else:
                             st.warning("Pilih part dulu.")
 
-# === PAGE: PENGURUSAN STOK (V74: BAKUL RESTOCK SIMPLE) ===
+# === PAGE: PENGURUSAN STOK ===
 elif st.session_state.page == "📦 PENGURUSAN STOK":
     st.title("📦 Pengurusan Stok (Inventory)")
     t_restock, t_master, t_log = st.tabs(["📥 Masuk Stok (Restock)", "📋 Master List", "📜 Log Pembelian"])
@@ -1021,8 +1009,6 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                     my_bar = st.progress(0, text=progress_text)
                     
                     for i, item in enumerate(st.session_state.restock_cart):
-                        # Generate Code (Simple Hash based on name to keep consistent or Create New)
-                        # Check if exists in Master
                         found_code = None
                         if not df_m.empty:
                             match = df_m[df_m['ItemName'].str.lower() == item['ItemName'].lower()]
@@ -1032,7 +1018,7 @@ elif st.session_state.page == "📦 PENGURUSAN STOK":
                         if not found_code:
                             found_code = f"ITM-{int(time.time())}-{i}" # Unique ID
                         
-                        # 1. Update/Add Master (V76: Added Supplier Argument)
+                        # 1. Update/Add Master (Added Supplier)
                         check_and_update_master(found_code, item['ItemName'], item['Cost'], item['Sell'], item['Qty'], supp)
                         
                         # 2. Add Log
