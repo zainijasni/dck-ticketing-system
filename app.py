@@ -232,7 +232,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         c1, c2 = st.columns([1, 2])
         with c1:
             if str(job['Image_Link']).startswith("http"): st.image(job['Image_Link'])
-            st.download_button("Print Tiket (Tanpa Pass)", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
+            st.download_button("Print Tiket", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
             
         with c2:
             df_p = load_data("Parts")
@@ -325,3 +325,4 @@ elif st.session_state.page == "📈 LAPORAN":
         m2.metric("Total Untung", f"RM {df['Untung'].sum():.2f}")
         
         st.bar_chart(df['Untung'])
+
