@@ -443,7 +443,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m, icon='✅')
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI (V63.1 - BAKUL & DELETE) ===
+# === PAGE: JUALAN KEDAI (EASY DELETE UPDATE) ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     tab_pos, tab_manage = st.tabs(["🛒 Kaunter Bayaran", "📋 Rekod Jualan"])
@@ -461,25 +461,27 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     st.session_state.pos_cart.append({"Item": item, "Qty": qty, "Harga_Unit": price, "Total": qty * price})
                     st.toast(f"{item} ditambah!", icon='🛒')
         
-        # 2. CART
+        # 2. CART LIST & QUICK DELETE
         if st.session_state.pos_cart:
             st.divider()
             st.subheader("🛍️ Bakul Jualan")
-            cart_df = pd.DataFrame(st.session_state.pos_cart)
-            st.dataframe(cart_df, use_container_width=True)
             
-            # --- FITUR BUANG ITEM ---
-            with st.expander("🗑️ Buang Item Dari Bakul"):
-                opts = [f"{i}. {x['Item']} (x{x['Qty']})" for i, x in enumerate(st.session_state.pos_cart)]
-                sel_del = st.selectbox("Pilih Item:", opts)
-                if st.button("Hapus Item Terpilih"):
-                    idx = int(sel_del.split(".")[0])
-                    removed = st.session_state.pos_cart.pop(idx)
-                    st.toast(f"{removed['Item']} dibuang!", icon='🗑️')
-                    st.rerun()
-            # ------------------------
+            # --- NEW UI: LIST WITH DELETE BUTTONS ---
+            st.markdown("---")
+            for i, row in enumerate(st.session_state.pos_cart):
+                c1, c2, c3, c4 = st.columns([3, 1, 1, 0.5])
+                c1.write(f"**{row['Item']}**")
+                c2.write(f"x {row['Qty']}")
+                c3.write(f"RM {row['Total']:.2f}")
+                # Tombol X Merah
+                if c4.button("❌", key=f"del_cart_{i}"):
+                    st.session_state.pos_cart.pop(i)
+                    st.rerun() # Refresh terus lepas delete
+            st.markdown("---")
+            # ----------------------------------------
 
-            grand_total = cart_df['Total'].sum()
+            cart_df = pd.DataFrame(st.session_state.pos_cart)
+            grand_total = cart_df['Total'].sum() if not cart_df.empty else 0
             st.metric("GRAND TOTAL", f"RM {grand_total:.2f}")
             
             with st.form("checkout_form"):
