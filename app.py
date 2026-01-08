@@ -77,22 +77,21 @@ def init_db():
     try:
         client = get_client()
         sh = client.open_by_key(SHEET_ID)
-        # Tickets
         try: ws = sh.worksheet("Tickets")
         except: ws = sh.add_worksheet("Tickets", 1000, 20)
         h_t = ["ID", "Tarikh", "Customer", "Phone", "Email", "Model", "SN", "Password", "Masalah", "Fizikal", "Aksesori", "Status", "Kos_Part", "Harga_Jual", "Image_Link", "Tech_Note"]
         if len(ws.row_values(1)) != len(h_t): ws.update("A1:P1", [h_t])
-        # Parts
+        
         try: ws_p = sh.worksheet("Parts")
         except: ws_p = sh.add_worksheet("Parts", 1000, 10)
         h_p = ["ID", "TicketID", "NamaPart", "Supplier", "TarikhMasuk", "WarrantyBulan", "TarikhExpire", "HargaBeli"]
         if ws_p.row_values(1) != h_p: ws_p.update("A1:H1", [h_p])
-        # Sales
+        
         try: ws_s = sh.worksheet("Sales")
         except: ws_s = sh.add_worksheet("Sales", 1000, 10)
         h_s = ["ID", "Tarikh", "Item", "Qty", "Harga_Unit", "Total", "Customer", "PaymentMethod"]
         if ws_s.row_values(1) != h_s: ws_s.update("A1:H1", [h_s])
-        # Config
+        
         try: ws_c = sh.worksheet("Config")
         except: 
             ws_c = sh.add_worksheet("Config", 100, 2)
@@ -130,25 +129,20 @@ def update_cell_data(tab_name, id_val, col_dict):
     client = get_client(); sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
     cell = robust_api_call(sheet.find, str(id_val))
     if cell:
-        for col_idx, val in col_dict.items():
-            robust_api_call(sheet.update_cell, cell.row, col_idx, val)
-        st.cache_data.clear()
-        return True
+        for col_idx, val in col_dict.items(): robust_api_call(sheet.update_cell, cell.row, col_idx, val)
+        st.cache_data.clear(); return True
     return False
 
 def delete_row_data(tab_name, id_val):
     client = get_client(); sheet = client.open_by_key(SHEET_ID).worksheet(tab_name)
     cell = robust_api_call(sheet.find, str(id_val))
-    if cell:
-        robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
+    if cell: robust_api_call(sheet.delete_rows, cell.row); st.cache_data.clear(); return True
     return False
 
 def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
-    client = get_client()
-    sheet = client.open_by_key(SHEET_ID).worksheet("Tickets")
+    client = get_client(); sheet = client.open_by_key(SHEET_ID).worksheet("Tickets")
     cell = robust_api_call(sheet.find, str(tid))
     if cell:
-        # Col 3=Cust, 4=Phone, 5=Email, 6=Model, 7=SN, 8=Pwd, 9=Masalah
         robust_api_call(sheet.update_cell, cell.row, 3, nama)
         robust_api_call(sheet.update_cell, cell.row, 4, phone)
         robust_api_call(sheet.update_cell, cell.row, 5, email)
@@ -156,8 +150,7 @@ def update_customer_info_db(tid, nama, phone, email, model, sn, pwd, masalah):
         robust_api_call(sheet.update_cell, cell.row, 7, sn)
         robust_api_call(sheet.update_cell, cell.row, 8, pwd)
         robust_api_call(sheet.update_cell, cell.row, 9, masalah)
-        st.cache_data.clear()
-        return True
+        st.cache_data.clear(); return True
     return False
 
 def update_part_data(part_id, new_name, new_supp, new_price, new_warranty):
@@ -218,9 +211,8 @@ def generate_pdf(t, type="SERVICE"):
     y -= 30; p.drawString(50, y, "Customer Signature: _________________"); p.drawString(300, y, "Authorized Signature: _________________")
     p.save(); buffer.seek(0); return buffer
 
-# --- 5. EMAIL & LINKS (FIXED CRASH ISSUE) ---
+# --- 5. EMAIL & LINKS ---
 def generate_message_content(data):
-    # SAFETY FIRST: Gunakan .get() untuk semua field
     cust = data.get('Customer', 'Pelanggan')
     status = data.get('Status', 'Pending')
     tid = data.get('ID', '-')
@@ -232,23 +224,18 @@ def generate_message_content(data):
     company = st.session_state.config.get('Company_Name', 'DCK TECH')
 
     msg = f"Hai {cust},\n\nTerima kasih berurusan dengan {company}."
-    
     if status == 'Pending': msg += "\nKami telah menerima peranti anda."
     elif status in ['Done', 'Collected']: msg += "\n✅ Peranti SIAP."
     else: msg += f"\nStatus terkini: {status}"
     
     msg += f"\n\n--- BUTIRAN ---\nID: {tid}\nModel: {model}\nS/N: {sn}\nMasalah: {masalah}\nNota: {note}"
-    
     if status in ['Done', 'Collected']: msg += f"\n\n💰 TOTAL: RM {price:.2f}"
-    
     msg += "\n\nSekian,\nTeam DCK Tech"
     return msg
 
 def generate_links(type, data):
     phone = clean_phone_number_my(data.get('Phone', ''))
-    # Panggil fungsi yang dah selamat
     full_msg = generate_message_content(data)
-    
     if type == "WA": return f"https://wa.me/{phone}?text={urllib.parse.quote(full_msg)}"
     elif type == "EMAIL": return f"mailto:{data.get('Email', '')}?subject=Status%20Tiket&body={urllib.parse.quote(full_msg)}"
 
@@ -278,11 +265,10 @@ if st.session_state.page == "📊 DASHBOARD":
     st.title("📊 DCK Tech Dashboard")
     df = load_data("Tickets"); df_s = load_data("Sales")
     
-    # KIRA SALES HARI INI
+    # SALES TODAY
     today_str = datetime.now().strftime("%Y-%m-%d")
     sales_today = 0.0
-    if not df_s.empty:
-        sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
+    if not df_s.empty: sales_today += df_s[df_s['Tarikh'] == today_str]['Total'].apply(safe_float).sum()
 
     if not df.empty:
         c1, c2, c3, c4 = st.columns(4)
@@ -294,15 +280,24 @@ if st.session_state.page == "📊 DASHBOARD":
     st.divider()
     st.metric("💰 JUALAN KEDAI (HARI INI)", f"RM {sales_today:.2f}")
     
+    # CARI TIKET (SENTIASA ADA)
+    st.write("### 🔍 Cari Ticket")
+    search = st.text_input("Masukkan Nama / ID / Model:", placeholder="Contoh: DCK-12345")
+    
     st.write("### Senarai Job Terkini")
     if not df.empty:
+        # FILTER LOGIC
+        if search:
+            df = df[df.apply(lambda r: r.astype(str).str.contains(search, case=False).any(), axis=1)]
+            
         for _, row in df.iloc[::-1].head(10).iterrows():
-            with st.expander(f"{row.get('ID')} - {row.get('Customer')} ({row.get('Status')})"):
-                st.write(f"Model: {row.get('Model')} | Masalah: {row.get('Masalah')}")
+            with st.expander(f"{row.get('ID', '-')} - {row.get('Customer', '-')} ({row.get('Status', '-')})"):
+                st.write(f"Model: {row.get('Model', '-')} | Masalah: {row.get('Masalah', '-')}")
                 if st.button("🔧 Manage Job", key=f"btn_{row.get('ID')}"):
                     st.session_state.selected_id = row.get('ID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
+    else: st.info("Tiada rekod tiket.")
 
-# === PAGE: DAFTAR TIKET (3-COLUMN LAYOUT) ===
+# === PAGE: DAFTAR TIKET ===
 elif st.session_state.page == "📝 DAFTAR TIKET":
     st.title("📝 Tiket Masuk Baru")
     with st.container(border=True):
@@ -348,7 +343,7 @@ elif st.session_state.page == "📝 DAFTAR TIKET":
                 if ok: st.toast(m)
                 else: st.error(m)
 
-# === PAGE: JUALAN KEDAI (POS) ===
+# === PAGE: JUALAN KEDAI ===
 elif st.session_state.page == "🛒 JUALAN KEDAI":
     st.title("🛒 Sistem Jualan (POS)")
     tab_pos, tab_manage = st.tabs(["🛒 Jualan Baru", "📋 Urus Jualan"])
@@ -362,7 +357,6 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
             total = qty * price
             c5.metric("TOTAL", f"RM {total:.2f}")
             pay = st.selectbox("Bayaran", ["Cash", "QR", "Transfer"])
-            
             if st.button("✅ REKOD"):
                 if item and total > 0:
                     sid = f"SALE-{datetime.now().strftime('%d%H%M')}"
@@ -453,10 +447,25 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     d = st.selectbox("Del", ["-"]+parts['ID'].tolist())
                     if d != "-" and st.button("Delete"): delete_part(d); st.rerun()
 
-# === PAGE: INVENTORY & LAPORAN ===
+# === PAGE: INVENTORY ===
 elif st.session_state.page == "📦 INVENTORY":
-    st.title("📦 Inventory Log"); df = load_data("Parts"); st.dataframe(df)
+    st.title("📦 Inventory Log")
+    df_p = load_data("Parts")
+    search_p = st.text_input("🔍 Cari Part (Nama/Ticket ID):")
+    
+    if not df_p.empty:
+        if search_p:
+            df_p = df_p[df_p.apply(lambda r: r.astype(str).str.contains(search_p, case=False).any(), axis=1)]
+            
+        for i, row in df_p.iterrows():
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                c1.write(f"**{row.get('NamaPart')}** (RM {row.get('HargaBeli')}) | Ticket: {row.get('TicketID')}")
+                if c2.button("Go to Job", key=f"inv_{row.get('ID')}"):
+                    st.session_state.selected_id = row.get('TicketID'); st.session_state.page = "🔧 UPDATE STATUS"; st.rerun()
+    else: st.info("Tiada barang.")
 
+# === PAGE: LAPORAN ===
 elif st.session_state.page == "📈 LAPORAN":
     st.title("📈 Laporan Prestasi")
     df = load_data("Tickets"); df_s = load_data("Sales"); df_p = load_data("Parts")
