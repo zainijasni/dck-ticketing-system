@@ -365,6 +365,7 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                     st.toast("Jualan Direkod!", icon='💰')
                     st.session_state.last_sale = {"ID": sid, "Tarikh": datetime.now().strftime("%Y-%m-%d"), "Item": item, "Qty": qty, "Harga_Unit": price, "Total": total, "Customer": cust}
                     time.sleep(1); st.rerun()
+        
         if 'last_sale' in st.session_state:
             st.download_button("🖨️ Resit", generate_pdf(st.session_state.last_sale, "SALES"), "Resit.pdf", use_container_width=True)
 
@@ -385,94 +386,109 @@ elif st.session_state.page == "🛒 JUALAN KEDAI":
                         update_cell_data("Sales", sale_id, {3: e_item, 4: e_qty, 5: e_price, 6: e_qty * e_price})
                         st.toast("Jualan Dikemaskini!", icon='✅'); time.sleep(1); st.rerun()
 
-# === PAGE: UPDATE STATUS ===
+# === PAGE: UPDATE STATUS (FIXED LOGIC) ===
 elif st.session_state.page == "🔧 UPDATE STATUS":
     st.title("🔧 Bilik Technician")
     df = load_data("Tickets")
+    
     if not df.empty:
-        ids = df['ID'].astype(str).tolist()
-        tgt = str(st.session_state.selected_id) if st.session_state.selected_id else ids[-1]
-        pid = st.selectbox("Pilih Job:", ids, index=ids.index(tgt) if tgt in ids else 0)
-        job = df[df['ID'].astype(str) == str(pid)].iloc[0]
-        
-        with st.expander("ℹ️ MAKLUMAT TIKET & KOMUNIKASI (KLIK EDIT)", expanded=True):
-            edit_mode = st.checkbox("✏️ Tick Untuk Edit Info")
-            if edit_mode:
-                with st.form("edit_cust_form"):
-                    ec_nama = st.text_input("Nama", value=job.get('Customer',''))
-                    c_ec1, c_ec2 = st.columns(2)
-                    ec_phone = c_ec1.text_input("Phone", value=job.get('Phone',''))
-                    ec_email = c_ec2.text_input("Email", value=job.get('Email',''))
-                    c_ec3, c_ec4, c_ec5 = st.columns(3)
-                    ec_model = c_ec3.text_input("Model", value=job.get('Model',''))
-                    ec_sn = c_ec4.text_input("Serial No", value=job.get('SN',''))
-                    ec_pwd = c_ec5.text_input("Password", value=job.get('Password',''))
-                    ec_mslh = st.text_area("Masalah", value=job.get('Masalah',''))
-                    if st.form_submit_button("💾 SIMPAN PERUBAHAN"):
-                        if update_customer_info_db(pid, ec_nama, ec_phone, ec_email, ec_model, ec_sn, ec_pwd, ec_mslh):
-                            st.toast("Info Berjaya Diubah!", icon='✅'); time.sleep(1); st.rerun()
-            else:
-                c1, c2 = st.columns(2)
-                c1.write(f"**Nama:** {job.get('Customer','-')}"); c1.write(f"**Model:** {job.get('Model','-')}")
-                c1.write(f"**Phone:** {job.get('Phone','-')}"); c1.write(f"**Email:** {job.get('Email','-')}")
-                c2.write(f"**Masalah:** {job.get('Masalah','-')}"); c2.error(f"🔐 PWD: {job.get('Password','-')}")
-
-            st.divider()
-            ca, cb = st.columns(2)
-            wa_url = generate_links("WA", job)
-            ca.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
-            if job.get('Email'): 
-                with cb:
-                    if st.button("📧 Hantar Email + PDF (Auto Server)", key=f"em_{pid}"):
-                        doc = "INVOICE" if job.get('Status') in ['Done', 'Collected'] else "SERVICE"
-                        ok, m = send_email_with_pdf(job.get('Email'), job, generate_pdf(job, doc), "Status.pdf")
-                        if ok: st.toast(m, icon='✅')
-                        else: st.error(m)
-            else: cb.caption("Tiada Email.")
-        
-        c_l, c_r = st.columns([1, 2])
-        with c_l:
-            st.download_button("Print Tiket", generate_pdf(job, "SERVICE"), "Tiket.pdf")
-            im = str(job.get('Image_Link'))
-            if im and len(im) > 5:
-                for i in im.split(','): st.image(i)
-
-        with c_r:
-            df_p = load_data("Parts")
-            parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
-            kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
+        # LOGIK PEMILIHAN ID YANG KUKUH
+        all_ids = df['ID'].astype(str).tolist()
+        # Jika session ID tak wujud dalam list (contoh: baru delete), ambil ID pertama
+        if st.session_state.selected_id not in all_ids:
+            st.session_state.selected_id = all_ids[-1] if all_ids else None
             
-            t1, t2 = st.tabs(["Status", "Parts"])
-            with t1:
-                st.write(f"**KOS:** RM {kos:.2f}")
-                with st.form("upd_status"):
-                    stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                    nt = st.text_area("Nota Technician", value=job.get('Tech_Note',''))
-                    hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
-                    if st.form_submit_button("UPDATE"):
-                        sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
-                        cl = robust_api_call(sheet.find, str(pid))
-                        if cl:
-                            robust_api_call(sheet.update_cell, cl.row, 12, stt)
-                            robust_api_call(sheet.update_cell, cl.row, 13, kos)
-                            robust_api_call(sheet.update_cell, cl.row, 14, hj)
-                            robust_api_call(sheet.update_cell, cl.row, 16, nt)
-                            st.cache_data.clear()
-                            st.toast("Status Dikemaskini!", icon='🎉'); time.sleep(1); st.rerun()
-                if stt in ["Done", "Collected"]: st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+        pid = st.selectbox("Pilih Job:", all_ids, index=all_ids.index(st.session_state.selected_id) if st.session_state.selected_id else 0)
+        
+        # Ambil data job berdasarkan PID
+        job_data = df[df['ID'].astype(str) == str(pid)]
+        
+        if not job_data.empty:
+            job = job_data.iloc[0]
+            
+            with st.expander("ℹ️ MAKLUMAT TIKET & KOMUNIKASI (KLIK EDIT)", expanded=True):
+                edit_mode = st.checkbox("✏️ Tick Untuk Edit Info")
+                if edit_mode:
+                    with st.form("edit_cust_form"):
+                        ec_nama = st.text_input("Nama", value=job.get('Customer',''))
+                        c_ec1, c_ec2 = st.columns(2)
+                        ec_phone = c_ec1.text_input("Phone", value=job.get('Phone',''))
+                        ec_email = c_ec2.text_input("Email", value=job.get('Email',''))
+                        c_ec3, c_ec4, c_ec5 = st.columns(3)
+                        ec_model = c_ec3.text_input("Model", value=job.get('Model',''))
+                        ec_sn = c_ec4.text_input("Serial No", value=job.get('SN',''))
+                        ec_pwd = c_ec5.text_input("Password", value=job.get('Password',''))
+                        ec_mslh = st.text_area("Masalah", value=job.get('Masalah',''))
+                        if st.form_submit_button("💾 SIMPAN PERUBAHAN"):
+                            if update_customer_info_db(pid, ec_nama, ec_phone, ec_email, ec_model, ec_sn, ec_pwd, ec_mslh):
+                                st.toast("Info Berjaya Diubah!", icon='✅'); time.sleep(1); st.rerun()
+                else:
+                    c1, c2 = st.columns(2)
+                    c1.write(f"**Nama:** {job.get('Customer','-')}"); c1.write(f"**Model:** {job.get('Model','-')}")
+                    c1.write(f"**Phone:** {job.get('Phone','-')}"); c1.write(f"**Email:** {job.get('Email','-')}")
+                    c2.write(f"**Masalah:** {job.get('Masalah','-')}"); c2.error(f"🔐 PWD: {job.get('Password','-')}")
 
-            with t2:
-                with st.form("ap", clear_on_submit=True):
-                    pn = st.text_input("Part"); ps = st.text_input("Supp"); w = st.number_input("Warr", 1); pr = st.number_input("Harga", 0.0)
-                    if st.form_submit_button("Add"):
-                        exp = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
-                        add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), w, exp, pr])
-                        st.toast("Part ditambah!", icon='➕'); time.sleep(1); st.rerun()
-                if not parts.empty:
-                    st.dataframe(parts[['ID', 'NamaPart', 'HargaBeli']])
-                    d = st.selectbox("Del", ["-"]+parts['ID'].tolist())
-                    if d != "-" and st.button("Delete"): 
-                        delete_part(d); st.toast("Part dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
+                st.divider()
+                ca, cb = st.columns(2)
+                wa_url = generate_links("WA", job)
+                ca.link_button("📱 WhatsApp Status", wa_url, use_container_width=True)
+                if job.get('Email'): 
+                    with cb:
+                        if st.button("📧 Hantar Email + PDF (Auto Server)", key=f"em_{pid}"):
+                            doc_type = "INVOICE" if job.get('Status') in ["Done", "Collected"] else "SERVICE"
+                            pdf_buf = generate_pdf(job, doc_type)
+                            success, msg = send_email_with_pdf(job.get('Email'), job, pdf_buf, f"Status_{pid}.pdf")
+                            if success: st.toast(msg, icon='✅')
+                            else: st.error(msg)
+                else: cb.caption("Tiada Email.")
+            
+            c_l, c_r = st.columns([1, 2])
+            with c_l:
+                st.download_button("📄 Cetak Tiket", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
+                img_str = str(job.get('Image_Link',''))
+                if img_str and img_str != "nan":
+                    urls = img_str.split(",")
+                    for u in urls:
+                        if u.startswith("http"): st.image(u, use_container_width=True)
+
+            with c_r:
+                df_p = load_data("Parts")
+                parts = df_p[df_p['TicketID'].astype(str) == str(pid)]
+                kos = sum([safe_float(x) for x in parts['HargaBeli'].tolist()]) if not parts.empty else 0
+                
+                t1, t2 = st.tabs(["Status", "Parts"])
+                with t1:
+                    st.write(f"**KOS:** RM {kos:.2f}")
+                    with st.form("upd_status"):
+                        stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job.get('Status','Pending')) if job.get('Status','Pending') in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
+                        nt = st.text_area("Nota Technician", value=job.get('Tech_Note',''))
+                        hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job.get('Harga_Jual',0)))
+                        if st.form_submit_button("UPDATE"):
+                            sheet = get_client().open_by_key(SHEET_ID).worksheet("Tickets")
+                            cl = robust_api_call(sheet.find, str(pid))
+                            if cl:
+                                robust_api_call(sheet.update_cell, cl.row, 12, stt)
+                                robust_api_call(sheet.update_cell, cl.row, 13, kos)
+                                robust_api_call(sheet.update_cell, cl.row, 14, hj)
+                                robust_api_call(sheet.update_cell, cl.row, 16, nt)
+                                st.cache_data.clear()
+                                st.toast("Status Dikemaskini!", icon='🎉'); time.sleep(1); st.rerun()
+                    if stt in ["Done", "Collected"]: st.download_button("🖨️ CETAK RESIT", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
+
+                with t2:
+                    with st.form("ap", clear_on_submit=True):
+                        pn = st.text_input("Part"); ps = st.text_input("Supp"); w = st.number_input("Warr", 1); pr = st.number_input("Harga", 0.0)
+                        if st.form_submit_button("Add"):
+                            exp = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
+                            add_row("Parts", [f"P-{int(time.time())}", pid, pn, ps, str(datetime.now().date()), w, exp, pr])
+                            st.toast("Part ditambah!", icon='➕'); time.sleep(1); st.rerun()
+                    if not parts.empty:
+                        st.dataframe(parts[['ID', 'NamaPart', 'HargaBeli']])
+                        d = st.selectbox("Del", ["-"]+parts['ID'].tolist())
+                        if d != "-" and st.button("Delete"): 
+                            delete_part(d); st.toast("Part dihapus!", icon='🗑️'); time.sleep(1); st.rerun()
+    else:
+        st.info("Tiada Data Tiket.")
 
 # === PAGE: INVENTORY ===
 elif st.session_state.page == "📦 INVENTORY":
@@ -482,7 +498,6 @@ elif st.session_state.page == "📦 INVENTORY":
     
     if not df_p.empty:
         if search_p: df_p = df_p[df_p.apply(lambda r: r.astype(str).str.contains(search_p, case=False).any(), axis=1)]
-        # FUNGSI LOOPING UNTUK CARD + BUTTON TELEPORT
         for i, row in df_p.iterrows():
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
