@@ -383,6 +383,10 @@ if sn_query:
         
     found = False
     if not df.empty:
+        # --- FIX: ROBUST S/N MATCHING ---
+        # Convert column to String -> Strip Whitespace -> Uppercase
+        # Convert query to String -> Strip Whitespace -> Uppercase
+        # This handles cases where S/N might be read as number (e.g. 123.0)
         history = df[df['SN'].astype(str).str.strip().str.upper() == str(sn_query).strip().upper()]
         
         if not history.empty:
@@ -634,7 +638,10 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                     img_qr = qr.make_image(fill_color="black", back_color="white")
                     
                     c_qr1, c_qr2 = st.columns([1, 2])
-                    c_qr1.image(img_qr.get_image(), caption=f"S/N: {job.get('SN')}", width=150)
+                    
+                    # --- FIX CRASH: Just pass img_qr directly (remove .get_image()) ---
+                    c_qr1.image(img_qr, caption=f"S/N: {job.get('SN')}", width=150)
+                    
                     c_qr2.write(f"**URL:** {qr_data}")
                     c_qr2.info("👉 Right-click gambar QR > 'Save Image' untuk print.")
             # ------------------------------------------
