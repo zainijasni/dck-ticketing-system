@@ -22,21 +22,23 @@ cloudinary.config(
 
 SHEET_ID = "1ssuZ3BzAih5goP5m_XsgAPjCj1OeDX_CdE--S0h-xek"
 
-# --- 2. SESSION STATE (NAVIGASI FIX) ---
+# --- 2. SESSION STATE ---
 if 'page' not in st.session_state: st.session_state.page = "📊 DASHBOARD"
 if 'selected_id' not in st.session_state: st.session_state.selected_id = None
 
 # --- 3. HELPER FUNCTIONS ---
 def safe_float(val):
-    """Cuci duit: Buang RM, tukar koma ke titik, kosong jadi 0"""
     try:
         if pd.isna(val) or str(val).strip() == "": return 0.0
         clean = str(val).upper().replace("RM", "").replace(",", ".").strip()
         return float(clean)
     except: return 0.0
 
+def safe_int(val):
+    try: return int(float(val))
+    except: return 0
+
 def robust_api_call(func, *args, **kwargs):
-    """Cuba 3 kali jika API busy"""
     for i in range(3):
         try:
             return func(*args, **kwargs)
@@ -85,13 +87,20 @@ def add_row(tab_name, row):
     robust_api_call(sheet.append_row, row)
     st.cache_data.clear()
 
-def update_part_data(part_id, new_name, new_supp, new_price):
+def update_part_data(part_id, new_name, new_supp, new_price, new_warranty):
     client = get_client()
     sheet = client.open_by_key(SHEET_ID).worksheet("Parts")
     cell = robust_api_call(sheet.find, str(part_id))
     if cell:
+        # Col 3=Nama, 4=Supp, 6=Warranty, 7=Expire, 8=Harga
         robust_api_call(sheet.update_cell, cell.row, 3, new_name)
         robust_api_call(sheet.update_cell, cell.row, 4, new_supp)
+        robust_api_call(sheet.update_cell, cell.row, 6, new_warranty)
+        
+        # Auto Recalc Expire Date
+        new_exp = (datetime.now() + pd.DateOffset(months=int(new_warranty))).strftime("%Y-%m-%d")
+        robust_api_call(sheet.update_cell, cell.row, 7, new_exp)
+        
         robust_api_call(sheet.update_cell, cell.row, 8, new_price)
         st.cache_data.clear()
         return True
@@ -143,25 +152,14 @@ def generate_pdf(t, type="SERVICE"):
     p.save(); buffer.seek(0)
     return buffer
 
-# --- 6. NAVIGATION LOGIC (THE FIX) ---
-# Kita define list menu dulu
+# --- 6. NAVIGATION ---
 PAGES = ["📊 DASHBOARD", "📝 DAFTAR TIKET", "🔧 UPDATE STATUS", "📦 INVENTORY", "📈 LAPORAN"]
-
-# Kita cari index semasa berdasarkan session state
-try:
-    current_index = PAGES.index(st.session_state.page)
-except:
-    current_index = 0
-
-# Sidebar dengan index yang betul
+try: current_index = PAGES.index(st.session_state.page)
+except: current_index = 0
 selected_page = st.sidebar.radio("NAVIGASI UTAMA", PAGES, index=current_index)
-
-# Update session state jika user klik manual
 if selected_page != st.session_state.page:
     st.session_state.page = selected_page
     st.rerun()
-
-# --- 7. PAGE LOGIC ---
 
 # === DASHBOARD ===
 if st.session_state.page == "📊 DASHBOARD":
@@ -225,7 +223,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         
         job = df[df['ID'].astype(str) == str(pid)].iloc[0]
         
-        with st.expander("ℹ️ INFO TIKET & PASSWORD", expanded=True):
+        with st.expander("ℹ️ MAKLUMAT PENUH TIKET (KLIK SINI)", expanded=True):
             c1, c2 = st.columns(2)
             c1.write(f"**Nama:** {job['Customer']}"); c1.write(f"**Model:** {job['Model']}")
             c2.write(f"**Masalah:** {job['Masalah']}"); c2.error(f"🔐 PWD: {job['Password']}")
@@ -233,7 +231,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
         c1, c2 = st.columns([1, 2])
         with c1:
             if str(job['Image_Link']).startswith("http"): st.image(job['Image_Link'])
-            st.download_button("Print Tiket", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
+            st.download_button("Print Tiket (Privacy)", generate_pdf(job, "SERVICE"), f"Tiket_{pid}.pdf")
             
         with c2:
             df_p = load_data("Parts")
@@ -244,7 +242,7 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
             
             with st.form("upd"):
                 stt = st.selectbox("Status", ["Pending", "Checking", "Waiting Part", "Done", "Collected"], index=["Pending", "Checking", "Waiting Part", "Done", "Collected"].index(job['Status']) if job['Status'] in ["Pending", "Checking", "Waiting Part", "Done", "Collected"] else 0)
-                nt = st.text_area("Nota Tech", value=job['Tech_Note'])
+                nt = st.text_area("Update Nota Tech", value=job['Tech_Note'])
                 hj = st.number_input("Harga Jual (Total Bill)", value=safe_float(job['Harga_Jual']))
                 
                 if st.form_submit_button("UPDATE STATUS & HARGA"):
@@ -262,84 +260,116 @@ elif st.session_state.page == "🔧 UPDATE STATUS":
                 st.download_button("🖨️ PRINT INVOICE", generate_pdf(job, "INVOICE"), "Resit.pdf", use_container_width=True)
 
         st.subheader("🔩 Pengurusan Parts")
-        t_list, t_edit, t_add = st.tabs(["List", "Edit", "Add"])
         
-        with t_list:
+        tab_list, tab_edit, tab_add = st.tabs(["📋 Senarai", "✏️ Edit Part", "➕ Tambah Part"])
+        
+        with tab_list:
             if not parts.empty: 
-                st.dataframe(parts[['ID', 'NamaPart', 'HargaBeli']])
+                # Papar Warranty juga
+                st.dataframe(parts[['ID', 'NamaPart', 'WarrantyBulan', 'HargaBeli']], use_container_width=True)
                 dp = st.selectbox("Hapus Part ID:", ["-"] + parts['ID'].tolist())
                 if dp != "-" and st.button("Hapus"): 
                     if delete_part(dp): st.rerun()
-                    
-        with t_edit:
+            else: st.info("Tiada part.")
+            
+        with tab_edit:
             if not parts.empty:
                 eid = st.selectbox("Edit Part ID:", parts['ID'].tolist())
                 cp = parts[parts['ID'] == eid].iloc[0]
                 with st.form("ep"):
                     n = st.text_input("Nama", value=cp['NamaPart']); s = st.text_input("Supp", value=cp['Supplier'])
-                    h = st.number_input("Harga", value=safe_float(cp['HargaBeli']))
-                    if st.form_submit_button("Simpan"):
-                        update_part_data(eid, n, s, h); st.rerun()
-                        
-        with t_add:
+                    
+                    c_e1, c_e2 = st.columns(2)
+                    # EDIT WARRANTY & HARGA
+                    w = c_e1.number_input("Warranty (Bulan)", value=safe_int(cp['WarrantyBulan']))
+                    h = c_e2.number_input("Harga", value=safe_float(cp['HargaBeli']))
+                    
+                    if st.form_submit_button("Simpan Perubahan"):
+                        update_part_data(eid, n, s, h, w); st.rerun()
+            else: st.caption("Tiada part.")
+
+        with tab_add:
             with st.form("ap"):
-                n = st.text_input("Part"); s = st.text_input("Supp"); h = st.number_input("Harga", 0.0)
+                n = st.text_input("Part Baru"); s = st.text_input("Supplier")
+                
+                c_a1, c_a2 = st.columns(2)
+                # TAMBAH WARRANTY & HARGA
+                w = c_a1.number_input("Warranty (Bulan)", value=1, min_value=0)
+                h = c_a2.number_input("Harga Beli (Modal)", 0.0)
+                
                 if st.form_submit_button("Tambah"):
-                    add_row("Parts", [f"P-{int(time.time())}", pid, n, s, str(datetime.now().date()), 0, "", h])
+                    exp_date = (datetime.now() + pd.DateOffset(months=int(w))).strftime("%Y-%m-%d")
+                    add_row("Parts", [f"P-{int(time.time())}", pid, n, s, str(datetime.now().date()), w, exp_date, h])
                     st.rerun()
 
 # === INVENTORY ===
 elif st.session_state.page == "📦 INVENTORY":
-    st.title("📦 Inventory")
+    st.title("📦 Inventory Log")
     df_p = load_data("Parts")
     if not df_p.empty:
         for i, row in df_p.iterrows():
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
-                c1.write(f"**{row['NamaPart']}** (RM {row['HargaBeli']}) - Ticket: {row['TicketID']}")
+                c1.write(f"**{row['NamaPart']}** (W: {row['WarrantyBulan']} bln) - Ticket: {row['TicketID']}")
                 if c2.button("Go to Job", key=f"inv_{i}"):
                     st.session_state.selected_id = row['TicketID']
                     st.session_state.page = "🔧 UPDATE STATUS"
                     st.rerun()
 
-# === LAPORAN (NEW & IMPROVED) ===
+# === LAPORAN ===
 elif st.session_state.page == "📈 LAPORAN":
-    st.title("📈 Laporan Analitik")
+    st.title("📈 Laporan Prestasi")
     df = load_data("Tickets")
     if not df.empty:
-        # 1. Bersihkan Data (Convert Type)
+        # Data Prep
         df['Tarikh'] = pd.to_datetime(df['Tarikh'], errors='coerce')
         df['Harga_Jual'] = df['Harga_Jual'].apply(safe_float)
         df['Kos_Part'] = df['Kos_Part'].apply(safe_float)
         df['Untung'] = df['Harga_Jual'] - df['Kos_Part']
         
-        # 2. Download Data Mentah
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Laporan Penuh (CSV)", csv, "Laporan_DCK.csv", "text/csv")
+        # 1. Kewangan
+        st.subheader("💰 Analisis Kewangan")
+        m1, m2 = st.columns(2)
+        m1.metric("Total Sales", f"RM {df['Harga_Jual'].sum():.2f}")
+        m2.metric("Total Untung", f"RM {df['Untung'].sum():.2f}")
         
+        # 2. Analisis Masalah (Top Problems) - INI YANG BOSS MINTA
+        st.divider()
+        st.subheader("🔧 Analisis Masalah (Top Kerosakan)")
+        
+        # Kita gabungkan semua masalah jadi satu teks panjang, lepas tu kira
+        if 'Masalah' in df.columns:
+            # Join semua row jadi string, split by koma
+            all_text = ",".join(df['Masalah'].astype(str).tolist())
+            # Bersihkan whitespace
+            all_items = [x.strip() for x in all_text.split(",") if x.strip() != ""]
+            
+            if all_items:
+                counts = pd.Series(all_items).value_counts().head(10) # Ambil Top 10
+                st.bar_chart(counts)
+                st.caption("Carta menunjukkan jenis kerosakan paling kerap berlaku.")
+            else:
+                st.info("Tiada data masalah yang cukup.")
+
         st.divider()
         
-        # 3. Statistik Tabular (Hari/Minggu/Bulan)
+        # 3. Chart Berkala
         tab_h, tab_m, tab_b = st.tabs(["📅 Harian", "📆 Mingguan", "🗓️ Bulanan"])
         
         with tab_h:
-            st.write("### Jualan Harian (30 Hari Terakhir)")
             daily = df.groupby(df['Tarikh'].dt.date)[['Harga_Jual', 'Untung']].sum().tail(30)
             st.line_chart(daily)
-            st.dataframe(daily)
 
         with tab_m:
-            st.write("### Jualan Mingguan")
-            # Group by Week
             df['Minggu'] = df['Tarikh'].dt.to_period('W').astype(str)
             weekly = df.groupby('Minggu')[['Harga_Jual', 'Untung']].sum()
             st.bar_chart(weekly)
-            st.dataframe(weekly)
 
         with tab_b:
-            st.write("### Jualan Bulanan")
-            # Group by Month
             df['Bulan'] = df['Tarikh'].dt.to_period('M').astype(str)
             monthly = df.groupby('Bulan')[['Harga_Jual', 'Untung']].sum()
             st.bar_chart(monthly)
-            st.dataframe(monthly)
+            
+        # Download
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Laporan (Excel/CSV)", csv, "Laporan_DCK.csv", "text/csv")
